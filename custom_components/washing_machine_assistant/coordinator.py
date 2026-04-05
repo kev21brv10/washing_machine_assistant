@@ -108,8 +108,16 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         payload = await self._storage.async_load()
         self._learned_profiles = self._sort_profiles(self._storage.parse_profiles(payload))
         self._adaptive_thresholds = self._storage.parse_adaptive_thresholds(payload)
+        self._last_calibrated_profile = self._profile_by_slug(payload.get("last_calibrated_slug"))
+        self._last_calibrated_at = self._storage.parse_datetime(payload.get("last_calibrated_at"))
+        self._last_auto_learned_profile = self._profile_by_slug(payload.get("last_auto_learned_slug"))
+        self._last_auto_learned_at = self._storage.parse_datetime(payload.get("last_auto_learned_at"))
         self._engine.set_learned_profiles(self._learned_profiles)
         self._apply_runtime_thresholds()
+        self._engine.restore_completed_cycle(
+            self._storage.parse_inference_result(payload),
+            self._storage.parse_datetime(payload.get("completed_at")),
+        )
 
     async def _async_update_data(self) -> InferenceResult:
         now = dt_util.utcnow()
@@ -207,13 +215,20 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
 
         self._learned_profiles = self._sort_profiles(renamed_profiles)
         self._engine.set_learned_profiles(self._learned_profiles)
-        await self._storage.async_save(
-            learned_profiles=self._learned_profiles,
-            adaptive_thresholds=self._adaptive_thresholds,
-        )
 
         if self._last_calibrated_profile and self._last_calibrated_profile.slug == mode_slug:
             self._last_calibrated_profile = replace(self._last_calibrated_profile, label=cleaned_name)
+        if self._last_auto_learned_profile and self._last_auto_learned_profile.slug == mode_slug:
+            self._last_auto_learned_profile = replace(self._last_auto_learned_profile, label=cleaned_name)
+
+        completed_result = self._engine.completed_result
+        if completed_result is not None and completed_result.probable_program == mode_slug:
+            self._engine.restore_completed_cycle(
+                replace(completed_result, program_label=cleaned_name),
+                self._engine.completed_at,
+            )
+
+        await self._async_persist_state()
 
         await self.async_request_refresh()
         return True
@@ -231,33 +246,27 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             return
         if cycle_key == self._last_processed_cycle_key:
             return
+        if self._calibration_active:
+            if result.status != "finished":
+                return
+            if self._calibration_cycle_started_at is None:
+                return
+            if result.cycle_started_at != self._calibration_cycle_started_at:
+                return
 
-        if not self._calibration_active:
+            profile = self._build_learned_profile(result)
+            self._learned_profiles.append(profile)
+            self._learned_profiles = self._sort_profiles(self._learned_profiles)
+            self._engine.set_learned_profiles(self._learned_profiles)
+            self._update_adaptive_thresholds_from_result(result)
+            self._last_calibrated_profile = profile
+            self._last_calibrated_at = dt_util.utcnow()
+            self._reset_calibration_capture()
+        else:
             await self._async_handle_auto_learning(result, cycle_key)
-            return
 
-        if result.status != "finished":
-            return
-
-        if self._calibration_cycle_started_at is None:
-            return
-
-        if result.cycle_started_at != self._calibration_cycle_started_at:
-            return
-
-        profile = self._build_learned_profile(result)
-        self._learned_profiles.append(profile)
-        self._learned_profiles = self._sort_profiles(self._learned_profiles)
-        self._engine.set_learned_profiles(self._learned_profiles)
-        self._update_adaptive_thresholds_from_result(result)
-        await self._storage.async_save(
-            learned_profiles=self._learned_profiles,
-            adaptive_thresholds=self._adaptive_thresholds,
-        )
-        self._last_calibrated_profile = profile
-        self._last_calibrated_at = dt_util.utcnow()
-        self._reset_calibration_capture()
         self._last_processed_cycle_key = cycle_key
+        await self._async_persist_state()
 
     async def _async_handle_auto_learning(self, result: InferenceResult, cycle_key: str) -> None:
         if result.status != "finished":
@@ -294,10 +303,6 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._learned_profiles = self._sort_profiles(merged_profiles)
         self._engine.set_learned_profiles(self._learned_profiles)
         self._update_adaptive_thresholds_from_result(result)
-        await self._storage.async_save(
-            learned_profiles=self._learned_profiles,
-            adaptive_thresholds=self._adaptive_thresholds,
-        )
         return True
 
     def _build_learned_profile(self, result: InferenceResult) -> ProgramProfile:
@@ -382,6 +387,14 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             high_power_w=self._adaptive_thresholds.get("high_power_w", self._base_high_power_w),
         )
 
+    def _profile_by_slug(self, slug: str | None) -> ProgramProfile | None:
+        if not slug:
+            return None
+        for profile in self._learned_profiles:
+            if profile.slug == slug:
+                return profile
+        return None
+
     def _begin_calibration_capture(
         self,
         *,
@@ -409,6 +422,20 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._calibration_cycle_started_at = None
         self._calibration_power_samples = []
         self._calibration_vibration_samples = []
+
+    async def _async_persist_state(self) -> None:
+        await self._storage.async_save(
+            learned_profiles=self._learned_profiles,
+            adaptive_thresholds=self._adaptive_thresholds,
+            last_calibrated_slug=None if self._last_calibrated_profile is None else self._last_calibrated_profile.slug,
+            last_calibrated_at=self._last_calibrated_at,
+            last_auto_learned_slug=None
+            if self._last_auto_learned_profile is None
+            else self._last_auto_learned_profile.slug,
+            last_auto_learned_at=self._last_auto_learned_at,
+            completed_result=self._engine.completed_result,
+            completed_at=self._engine.completed_at,
+        )
 
     def _update_adaptive_thresholds_from_result(self, result: InferenceResult) -> None:
         cycle_signature = result.diagnostics.get("cycle_signature", {})

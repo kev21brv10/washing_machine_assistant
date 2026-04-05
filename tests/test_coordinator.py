@@ -239,6 +239,54 @@ class WashingMachineCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(coordinator._calibration_cycle_started_at)
         coordinator._storage.async_save.assert_awaited_once()
 
+    async def test_initialize_restores_persisted_learning_metadata_and_finished_cycle(self) -> None:
+        coordinator = self._build_coordinator({"sensor.machine_power": "0"})
+        stored_profile = ProgramProfile(
+            slug="learned_mix_60",
+            label="Mix 60°",
+            min_duration_min=54,
+            typical_duration_min=66,
+            max_duration_min=78,
+            source="learned",
+            sample_count=1,
+        )
+        finished_at = datetime(2026, 4, 5, 16, 46, 44, tzinfo=timezone.utc)
+        coordinator._storage.async_load = AsyncMock(
+            return_value={
+                "learned_profiles": [dataclasses.asdict(stored_profile)],
+                "adaptive_thresholds": {"start_power_w": 10.6, "stop_power_w": 3.7, "high_power_w": 1071.4},
+                "last_calibrated_slug": "learned_mix_60",
+                "last_calibrated_at": "2026-04-05T16:52:14.359372+00:00",
+                "completed_at": "2026-04-05T16:52:14.359372+00:00",
+                "completed_result": {
+                    "available": True,
+                    "status": "finished",
+                    "phase": "finished",
+                    "probable_program": "learned_mix_60",
+                    "program_label": "Mix 60°",
+                    "program_source": "learned",
+                    "confidence": "high",
+                    "match_score": 88,
+                    "power_w": 0.0,
+                    "remaining_minutes": 0,
+                    "finish_time": finished_at.isoformat(),
+                    "cycle_started_at": "2026-04-05T15:43:14.358068+00:00",
+                    "last_activity_at": finished_at.isoformat(),
+                    "elapsed_minutes": 63,
+                    "observed_peak_power_w": 1995.0,
+                    "diagnostics": {},
+                },
+            }
+        )
+
+        await coordinator.async_initialize()
+
+        self.assertEqual(coordinator.learned_profiles[0].label, "Mix 60°")
+        self.assertEqual(coordinator.last_calibrated_profile.slug, "learned_mix_60")
+        self.assertEqual(coordinator.last_calibrated_at.isoformat(), "2026-04-05T16:52:14.359372+00:00")
+        self.assertEqual(coordinator.adaptive_thresholds["start_power_w"], 10.6)
+        self.assertEqual(coordinator._engine.completed_result.probable_program, "learned_mix_60")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -136,6 +136,10 @@ class WashingMachineInferenceEngine:
     def set_learned_profiles(self, profiles: list[ProgramProfile]) -> None:
         self._learned_profiles = tuple(profiles)
 
+    def restore_completed_cycle(self, result: InferenceResult | None, completed_at: datetime | None) -> None:
+        self._completed_result = result
+        self._completed_at = completed_at
+
     def set_runtime_thresholds(
         self,
         *,
@@ -642,6 +646,14 @@ class WashingMachineInferenceEngine:
             "spin_like_samples": self._spin_like_samples,
             "completed": asdict(self._completed_result) if self._completed_result else None,
         }
+
+    @property
+    def completed_result(self) -> InferenceResult | None:
+        return self._completed_result
+
+    @property
+    def completed_at(self) -> datetime | None:
+        return self._completed_at
 
 
 def merge_profile(profile: ProgramProfile, features: CycleFeatures) -> ProgramProfile:
