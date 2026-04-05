@@ -160,6 +160,39 @@ class WashingMachineInferenceEngineTests(unittest.TestCase):
         self.assertEqual(result.probable_program, "learned_coton_1")
         self.assertEqual(result.program_source, "learned")
 
+    def test_builtin_profiles_are_ignored_once_learned_profiles_exist(self) -> None:
+        self.engine.set_learned_profiles(
+            [
+                ProgramProfile(
+                    slug="learned_mix_60",
+                    label="Mix 60°",
+                    min_duration_min=55,
+                    typical_duration_min=66,
+                    max_duration_min=78,
+                    source="learned",
+                    sample_count=1,
+                    peak_power_w=1990.0,
+                    uses_heating=True,
+                )
+            ]
+        )
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 15.0, False, None),
+                (8, 1880.0, False, None),
+                (20, 180.0, True, None),
+                (40, 70.0, False, None),
+                (60, 25.0, False, None),
+                (66, 0.0, False, None),
+                (72, 0.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.probable_program, "learned_mix_60")
+        self.assertEqual(result.program_source, "learned")
+
     def test_closest_learned_profile_uses_signature_and_score(self) -> None:
         self.engine.set_learned_profiles(
             [

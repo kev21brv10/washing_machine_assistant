@@ -390,13 +390,9 @@ class WashingMachineInferenceEngine:
         scores_by_slug: dict[str, float] = {}
         current_signature = self._build_cycle_signature(self._cycle_power_samples, self._cycle_vibration_samples)
 
-        for profile in (*self._learned_profiles, *PROGRAM_PROFILES):
+        candidate_profiles = self._learned_profiles or PROGRAM_PROFILES
+        for profile in candidate_profiles:
             score = abs(profile.typical_duration_min - estimated_total)
-            if self._learned_profiles:
-                if profile.source == "learned":
-                    score -= 8
-                else:
-                    score += 8
             if estimated_total < profile.min_duration_min:
                 score += (profile.min_duration_min - estimated_total) * 1.5
             if estimated_total > profile.max_duration_min:
