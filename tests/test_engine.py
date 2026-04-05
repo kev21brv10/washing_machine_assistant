@@ -270,6 +270,79 @@ class WashingMachineInferenceEngineTests(unittest.TestCase):
         self.assertGreater(signature["start_power_w"], 0)
         self.assertGreater(signature["stop_power_w"], 0)
 
+    def test_stability_lock_keeps_previous_program_when_new_candidate_is_only_slightly_better(self) -> None:
+        learned = ProgramProfile(
+            slug="learned_mix_60",
+            label="Mix 60",
+            min_duration_min=60,
+            typical_duration_min=66,
+            max_duration_min=74,
+            source="learned",
+        )
+        builtin = ProgramProfile(
+            slug="synthetics",
+            label="Synthetiques",
+            min_duration_min=50,
+            typical_duration_min=75,
+            max_duration_min=100,
+            source="builtin",
+        )
+        self.engine._learned_profiles = (learned,)  # type: ignore[attr-defined]
+        self.engine._locked_profile_slug = learned.slug  # type: ignore[attr-defined]
+        self.engine._locked_profile_score = 44.0  # type: ignore[attr-defined]
+
+        profile, score = self.engine._stabilize_program_choice(  # type: ignore[attr-defined]
+            elapsed_minutes=50,
+            candidate_profile=builtin,
+            candidate_score=38.5,
+            scores_by_slug={
+                learned.slug: 44.0,
+                builtin.slug: 38.5,
+            },
+        )
+        self.assertEqual(profile.slug, learned.slug)
+        self.assertEqual(score, 44.0)
+
+    def test_remaining_time_is_smoothed_instead_of_jumping_wildly(self) -> None:
+        self.engine.set_learned_profiles(
+            [
+                ProgramProfile(
+                    slug="learned_mix_60",
+                    label="Mix 60",
+                    min_duration_min=60,
+                    typical_duration_min=66,
+                    max_duration_min=74,
+                    source="learned",
+                    sample_count=1,
+                    peak_power_w=1980.0,
+                    uses_heating=True,
+                )
+            ]
+        )
+        checkpoints = [
+            (0, 0.0, False, None),
+            (1, 12.0, False, None),
+            (2, 15.0, False, None),
+            (8, 1880.0, False, None),
+            (20, 95.0, False, None),
+            (30, 120.0, False, None),
+            (40, 55.0, False, None),
+        ]
+        result = self._run_samples(checkpoints)
+        self.assertIsNotNone(result)
+        first_remaining = result.remaining_minutes
+        result = self.engine.update(
+            MachineTelemetry(
+                timestamp=self.start + timedelta(minutes=41),
+                power_w=20.0,
+                vibration_on=False,
+                door_open=None,
+            )
+        )
+        self.assertIsNotNone(result.remaining_minutes)
+        self.assertGreaterEqual(result.remaining_minutes, 0)
+        self.assertLessEqual(abs(result.remaining_minutes - (first_remaining - 1)), 8)
+
 
 if __name__ == "__main__":
     unittest.main()

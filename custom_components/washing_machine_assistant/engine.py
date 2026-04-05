@@ -163,6 +163,9 @@ class WashingMachineInferenceEngine:
         self._cycle_vibration_samples: list[bool] = []
         self._completed_result: InferenceResult | None = None
         self._completed_at: datetime | None = None
+        self._locked_profile_slug: str | None = None
+        self._locked_profile_score: float | None = None
+        self._estimated_total_minutes: int | None = None
 
     def update(self, telemetry: MachineTelemetry) -> InferenceResult:
         now = telemetry.timestamp
@@ -273,6 +276,9 @@ class WashingMachineInferenceEngine:
         self._cycle_power_samples = []
         self._cycle_vibration_samples = []
         self._pending_start_since = None
+        self._locked_profile_slug = None
+        self._locked_profile_score = None
+        self._estimated_total_minutes = None
 
     def _finish_cycle(self, now: datetime, power_w: float) -> InferenceResult:
         phase = PHASE_FINISHED
@@ -377,6 +383,7 @@ class WashingMachineInferenceEngine:
         estimated_total = self._estimate_total_duration(elapsed, phase)
         best_profile: ProgramProfile | None = None
         best_score: float | None = None
+        scores_by_slug: dict[str, float] = {}
         current_signature = self._build_cycle_signature(self._cycle_power_samples, self._cycle_vibration_samples)
 
         for profile in (*self._learned_profiles, *PROGRAM_PROFILES):
@@ -411,6 +418,7 @@ class WashingMachineInferenceEngine:
             signature_score = self._signature_distance(profile.signature, current_signature["signature"])
             if signature_score is not None:
                 score += signature_score * 0.45
+            scores_by_slug[profile.slug] = score
             if best_score is None or score < best_score:
                 best_score = score
                 best_profile = profile
@@ -418,9 +426,65 @@ class WashingMachineInferenceEngine:
         if best_profile is None:
             return PROGRAM_UNKNOWN, self._unknown_profile(), CONFIDENCE_LOW, None
 
+        best_profile, best_score = self._stabilize_program_choice(
+            elapsed_minutes=elapsed,
+            candidate_profile=best_profile,
+            candidate_score=best_score,
+            scores_by_slug=scores_by_slug,
+        )
         match_score = self._score_to_similarity(best_score)
         confidence = self._confidence_for_program(elapsed, match_score)
         return best_profile.slug, best_profile, confidence, match_score
+
+    def _stabilize_program_choice(
+        self,
+        *,
+        elapsed_minutes: int,
+        candidate_profile: ProgramProfile,
+        candidate_score: float,
+        scores_by_slug: dict[str, float],
+    ) -> tuple[ProgramProfile, float]:
+        if self._locked_profile_slug is None or elapsed_minutes < 20:
+            self._locked_profile_slug = candidate_profile.slug
+            self._locked_profile_score = candidate_score
+            return candidate_profile, candidate_score
+
+        if self._locked_profile_slug == candidate_profile.slug:
+            self._locked_profile_score = candidate_score
+            return candidate_profile, candidate_score
+
+        locked_profile = next(
+            (
+                profile
+                for profile in (*self._learned_profiles, *PROGRAM_PROFILES)
+                if profile.slug == self._locked_profile_slug
+            ),
+            None,
+        )
+        locked_score = scores_by_slug.get(self._locked_profile_slug, self._locked_profile_score or candidate_score)
+        if locked_profile is None:
+            self._locked_profile_slug = candidate_profile.slug
+            self._locked_profile_score = candidate_score
+            return candidate_profile, candidate_score
+
+        switch_margin = 12.0
+        if candidate_profile.source == "learned" and locked_profile.source != "learned":
+            switch_margin = 6.0
+        elif candidate_profile.source == locked_profile.source == "learned":
+            switch_margin = 8.0
+
+        locked_match = self._score_to_similarity(locked_score)
+        if locked_match is not None and locked_match < 45:
+            switch_margin = min(switch_margin, 5.0)
+
+        if candidate_score + switch_margin < locked_score:
+            self._locked_profile_slug = candidate_profile.slug
+            self._locked_profile_score = candidate_score
+            self._estimated_total_minutes = None
+            return candidate_profile, candidate_score
+
+        self._locked_profile_score = locked_score
+        return locked_profile, locked_score
 
     def _estimate_total_duration(self, elapsed_minutes: int, phase: str) -> int:
         progress = PHASE_PROGRESS_HINTS.get(phase)
@@ -450,9 +514,26 @@ class WashingMachineInferenceEngine:
 
         progress_based_total = self._estimate_total_duration(elapsed, phase)
         predicted_total = max(profile.min_duration_min, min(progress_based_total, profile.max_duration_min))
+        predicted_total = self._smooth_total_duration(predicted_total, elapsed)
         remaining = max(0, predicted_total - elapsed)
         finish_time = now + timedelta(minutes=remaining)
         return remaining, finish_time
+
+    def _smooth_total_duration(self, target_total: int, elapsed_minutes: int) -> int:
+        target_total = max(elapsed_minutes, target_total)
+        if self._estimated_total_minutes is None:
+            self._estimated_total_minutes = target_total
+            return target_total
+
+        current = self._estimated_total_minutes
+        if target_total > current:
+            smoothed = int(round((current * 0.8) + (target_total * 0.2)))
+        else:
+            smoothed = int(round((current * 0.65) + (target_total * 0.35)))
+
+        smoothed = max(elapsed_minutes, smoothed)
+        self._estimated_total_minutes = smoothed
+        return smoothed
 
     def _build_cycle_signature(self, power_samples: list[float], vibration_samples: list[bool]) -> dict[str, Any]:
         trimmed_power_samples, trimmed_vibration_samples = self._trim_idle_tail(power_samples, vibration_samples)
