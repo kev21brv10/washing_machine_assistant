@@ -20,9 +20,15 @@ class WashingMachineStorage:
         data = await self._store.async_load()
         return data or {}
 
-    async def async_save(self, *, learned_profiles: list[ProgramProfile]) -> None:
+    async def async_save(
+        self,
+        *,
+        learned_profiles: list[ProgramProfile],
+        adaptive_thresholds: dict[str, float] | None = None,
+    ) -> None:
         payload = {
             "learned_profiles": [asdict(profile) for profile in learned_profiles],
+            "adaptive_thresholds": adaptive_thresholds or {},
         }
         await self._store.async_save(payload)
 
@@ -35,3 +41,13 @@ class WashingMachineStorage:
             except TypeError:
                 continue
         return profiles
+
+    @staticmethod
+    def parse_adaptive_thresholds(data: dict[str, Any]) -> dict[str, float]:
+        raw = data.get("adaptive_thresholds", {})
+        parsed: dict[str, float] = {}
+        for key in ("start_power_w", "stop_power_w", "high_power_w"):
+            value = raw.get(key)
+            if isinstance(value, (int, float)):
+                parsed[key] = float(value)
+        return parsed

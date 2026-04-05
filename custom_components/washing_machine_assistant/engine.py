@@ -52,6 +52,8 @@ class CycleFeatures:
     high_power_ratio: float | None
     spin_ratio: float | None
     signature: list[int] | None = None
+    start_power_w: float | None = None
+    stop_power_w: float | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,20 @@ class WashingMachineInferenceEngine:
 
     def set_learned_profiles(self, profiles: list[ProgramProfile]) -> None:
         self._learned_profiles = tuple(profiles)
+
+    def set_runtime_thresholds(
+        self,
+        *,
+        start_power_w: float | None = None,
+        stop_power_w: float | None = None,
+        high_power_w: float | None = None,
+    ) -> None:
+        if start_power_w is not None:
+            self._start_power_w = start_power_w
+        if stop_power_w is not None:
+            self._stop_power_w = stop_power_w
+        if high_power_w is not None:
+            self._high_power_w = high_power_w
 
     def _reset_runtime(self) -> None:
         self._cycle_started_at: datetime | None = None
@@ -465,6 +481,8 @@ class WashingMachineInferenceEngine:
                 3,
             ),
             "signature": signature,
+            "start_power_w": round(max(4.0, min(40.0, max(8.0, min(active_samples) * 0.7))), 1) if active_samples else None,
+            "stop_power_w": round(max(1.0, min(15.0, min(trimmed_power_samples) + 1.0)), 1) if trimmed_power_samples else None,
         }
 
     def _trim_idle_tail(

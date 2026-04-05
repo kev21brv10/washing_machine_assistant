@@ -111,6 +111,7 @@ class WashingMachineSensor(CoordinatorEntity[WashingMachineCoordinator], SensorE
             if self.coordinator.last_auto_learned_profile is None
             else self.coordinator.last_auto_learned_profile.label,
             "last_auto_learned_at": self.coordinator.last_auto_learned_at,
+            "adaptive_thresholds": self.coordinator.adaptive_thresholds,
             "diagnostics": data.diagnostics,
         }
 

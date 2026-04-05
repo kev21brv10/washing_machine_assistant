@@ -220,6 +220,28 @@ class WashingMachineInferenceEngineTests(unittest.TestCase):
         self.assertIsNotNone(merged.signature)
         self.assertEqual(merged.signature[0], 4)
 
+    def test_cycle_signature_exposes_adaptive_threshold_hints(self) -> None:
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 18.0, False, None),
+                (5, 1800.0, False, None),
+                (10, 220.0, True, None),
+                (18, 160.0, True, None),
+                (24, 50.0, False, None),
+                (29, 70.0, True, None),
+                (34, 0.5, False, None),
+                (40, 0.2, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        signature = result.diagnostics["cycle_signature"]
+        self.assertIn("start_power_w", signature)
+        self.assertIn("stop_power_w", signature)
+        self.assertGreater(signature["start_power_w"], 0)
+        self.assertGreater(signature["stop_power_w"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

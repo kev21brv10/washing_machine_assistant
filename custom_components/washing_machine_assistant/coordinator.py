@@ -60,10 +60,14 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._last_auto_learned_at = None
         self._last_processed_cycle_key: str | None = None
         self._auto_learning_min_score = 78
+        self._base_start_power_w = float(entry.options.get(CONF_START_POWER_W, entry.data.get(CONF_START_POWER_W, DEFAULT_START_POWER_W)))
+        self._base_stop_power_w = float(entry.options.get(CONF_STOP_POWER_W, entry.data.get(CONF_STOP_POWER_W, DEFAULT_STOP_POWER_W)))
+        self._base_high_power_w = float(entry.options.get(CONF_HIGH_POWER_W, entry.data.get(CONF_HIGH_POWER_W, DEFAULT_HIGH_POWER_W)))
+        self._adaptive_thresholds: dict[str, float] = {}
         self._engine = WashingMachineInferenceEngine(
-            start_power_w=float(entry.options.get(CONF_START_POWER_W, entry.data.get(CONF_START_POWER_W, DEFAULT_START_POWER_W))),
-            stop_power_w=float(entry.options.get(CONF_STOP_POWER_W, entry.data.get(CONF_STOP_POWER_W, DEFAULT_STOP_POWER_W))),
-            high_power_w=float(entry.options.get(CONF_HIGH_POWER_W, entry.data.get(CONF_HIGH_POWER_W, DEFAULT_HIGH_POWER_W))),
+            start_power_w=self._base_start_power_w,
+            stop_power_w=self._base_stop_power_w,
+            high_power_w=self._base_high_power_w,
             finish_grace_minutes=int(
                 entry.options.get(
                     CONF_FINISH_GRACE_MINUTES,
@@ -95,7 +99,9 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
     async def async_initialize(self) -> None:
         payload = await self._storage.async_load()
         self._learned_profiles = self._sort_profiles(self._storage.parse_profiles(payload))
+        self._adaptive_thresholds = self._storage.parse_adaptive_thresholds(payload)
         self._engine.set_learned_profiles(self._learned_profiles)
+        self._apply_runtime_thresholds()
 
     async def _async_update_data(self) -> InferenceResult:
         snapshot = self._read_sources()
@@ -159,7 +165,10 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
 
         self._learned_profiles = self._sort_profiles(renamed_profiles)
         self._engine.set_learned_profiles(self._learned_profiles)
-        await self._storage.async_save(learned_profiles=self._learned_profiles)
+        await self._storage.async_save(
+            learned_profiles=self._learned_profiles,
+            adaptive_thresholds=self._adaptive_thresholds,
+        )
 
         if self._last_calibrated_profile and self._last_calibrated_profile.slug == mode_slug:
             self._last_calibrated_profile = replace(self._last_calibrated_profile, label=cleaned_name)
@@ -196,7 +205,11 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._learned_profiles.append(profile)
         self._learned_profiles = self._sort_profiles(self._learned_profiles)
         self._engine.set_learned_profiles(self._learned_profiles)
-        await self._storage.async_save(learned_profiles=self._learned_profiles)
+        self._update_adaptive_thresholds_from_result(result)
+        await self._storage.async_save(
+            learned_profiles=self._learned_profiles,
+            adaptive_thresholds=self._adaptive_thresholds,
+        )
         self._last_calibrated_profile = profile
         self._last_calibrated_at = dt_util.utcnow()
         self._calibration_armed = False
@@ -238,7 +251,11 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
 
         self._learned_profiles = self._sort_profiles(merged_profiles)
         self._engine.set_learned_profiles(self._learned_profiles)
-        await self._storage.async_save(learned_profiles=self._learned_profiles)
+        self._update_adaptive_thresholds_from_result(result)
+        await self._storage.async_save(
+            learned_profiles=self._learned_profiles,
+            adaptive_thresholds=self._adaptive_thresholds,
+        )
         return True
 
     def _build_learned_profile(self, result: InferenceResult) -> ProgramProfile:
@@ -281,6 +298,8 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             high_power_ratio=cycle_signature.get("high_power_ratio"),
             spin_ratio=cycle_signature.get("spin_ratio"),
             signature=cycle_signature.get("signature"),
+            start_power_w=cycle_signature.get("start_power_w"),
+            stop_power_w=cycle_signature.get("stop_power_w"),
         )
 
     @staticmethod
@@ -296,6 +315,55 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
     @staticmethod
     def _slugify(value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+    def _apply_runtime_thresholds(self) -> None:
+        self._engine.set_runtime_thresholds(
+            start_power_w=self._adaptive_thresholds.get("start_power_w", self._base_start_power_w),
+            stop_power_w=self._adaptive_thresholds.get("stop_power_w", self._base_stop_power_w),
+            high_power_w=self._adaptive_thresholds.get("high_power_w", self._base_high_power_w),
+        )
+
+    def _update_adaptive_thresholds_from_result(self, result: InferenceResult) -> None:
+        cycle_signature = result.diagnostics.get("cycle_signature", {})
+        suggested_start = cycle_signature.get("start_power_w")
+        suggested_stop = cycle_signature.get("stop_power_w")
+        peak_power = result.observed_peak_power_w or 0.0
+        suggested_heat = None
+        if peak_power > 0:
+            suggested_heat = max(400.0, min(2500.0, round(peak_power * 0.6, 1)))
+
+        self._adaptive_thresholds["start_power_w"] = self._merge_threshold(
+            self._adaptive_thresholds.get("start_power_w", self._base_start_power_w),
+            suggested_start,
+            minimum=4.0,
+            maximum=40.0,
+        )
+        self._adaptive_thresholds["stop_power_w"] = self._merge_threshold(
+            self._adaptive_thresholds.get("stop_power_w", self._base_stop_power_w),
+            suggested_stop,
+            minimum=1.0,
+            maximum=15.0,
+        )
+        self._adaptive_thresholds["high_power_w"] = self._merge_threshold(
+            self._adaptive_thresholds.get("high_power_w", self._base_high_power_w),
+            suggested_heat,
+            minimum=400.0,
+            maximum=2500.0,
+        )
+        self._apply_runtime_thresholds()
+
+    @staticmethod
+    def _merge_threshold(
+        current: float,
+        observed: float | None,
+        *,
+        minimum: float,
+        maximum: float,
+    ) -> float:
+        if observed is None:
+            return current
+        merged = round((current * 0.8) + (observed * 0.2), 1)
+        return max(minimum, min(maximum, merged))
 
     @property
     def calibration_state(self) -> str:
@@ -337,3 +405,7 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
     @property
     def last_auto_learned_at(self):
         return self._last_auto_learned_at
+
+    @property
+    def adaptive_thresholds(self) -> dict[str, float]:
+        return dict(self._adaptive_thresholds)

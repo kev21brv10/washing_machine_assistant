@@ -108,6 +108,15 @@ Les attributs utiles:
 
 - `last_auto_learned_mode`
 - `last_auto_learned_at`
+- `adaptive_thresholds`
+
+L'integration peut aussi ajuster progressivement ses seuils runtime a partir des cycles observes:
+
+- `start_power_w`
+- `stop_power_w`
+- `high_power_w`
+
+Les valeurs configurees restent la base initiale. Les valeurs adaptees sont exposees dans `adaptive_thresholds`.
 
 ## Renommer un mode appris
 
