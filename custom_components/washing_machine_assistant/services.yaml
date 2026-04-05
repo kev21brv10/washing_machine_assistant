@@ -1,0 +1,25 @@
+rename_learned_mode:
+  name: Renommer un mode appris
+  description: Renomme un profil appris par calibration.
+  fields:
+    entity_id:
+      name: Entite
+      description: Entite de l'integration a cibler si plusieurs machines existent.
+      example: sensor.machine_a_laver_program
+      selector:
+        entity:
+          integration: washing_machine_assistant
+    mode_slug:
+      name: Slug du mode
+      description: Identifiant interne du mode appris a renommer.
+      example: learned_quick_1
+      required: true
+      selector:
+        text:
+    new_name:
+      name: Nouveau nom
+      description: Nom lisible a afficher dans Home Assistant.
+      example: Rapide 30 min
+      required: true
+      selector:
+        text:

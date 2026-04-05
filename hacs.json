@@ -1,0 +1,6 @@
+{
+  "name": "Machine a laver intelligente",
+  "content_in_root": false,
+  "domains": ["washing_machine_assistant"],
+  "homeassistant": "2026.3.2"
+}

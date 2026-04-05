@@ -1,0 +1,92 @@
+{
+  "title": "Washing Machine Assistant",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure washing machine",
+        "description": "Select the sensors used to infer the cycle.",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Power sensor",
+          "vibration_sensor": "Vibration sensor",
+          "door_sensor": "Door sensor",
+          "start_power_w": "Start threshold (W)",
+          "stop_power_w": "Stop threshold (W)",
+          "high_power_w": "Heating threshold (W)",
+          "finish_grace_minutes": "Finish grace period (min)",
+          "reset_finished_minutes": "Finished state retention (min)",
+          "update_interval_seconds": "Refresh interval (s)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure washing machine",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Power sensor",
+          "vibration_sensor": "Vibration sensor",
+          "door_sensor": "Door sensor",
+          "start_power_w": "Start threshold (W)",
+          "stop_power_w": "Stop threshold (W)",
+          "high_power_w": "Heating threshold (W)",
+          "finish_grace_minutes": "Finish grace period (min)",
+          "reset_finished_minutes": "Finished state retention (min)",
+          "update_interval_seconds": "Refresh interval (s)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This power sensor is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Washing machine options",
+        "data": {
+          "name": "Name",
+          "power_sensor": "Power sensor",
+          "vibration_sensor": "Vibration sensor",
+          "door_sensor": "Door sensor",
+          "start_power_w": "Start threshold (W)",
+          "stop_power_w": "Stop threshold (W)",
+          "high_power_w": "Heating threshold (W)",
+          "finish_grace_minutes": "Finish grace period (min)",
+          "reset_finished_minutes": "Finished state retention (min)",
+          "update_interval_seconds": "Refresh interval (s)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status"
+      },
+      "phase": {
+        "name": "Phase"
+      },
+      "program": {
+        "name": "Probable program"
+      },
+      "remaining_time": {
+        "name": "Remaining time"
+      },
+      "finish_time": {
+        "name": "Finish time"
+      }
+    },
+    "binary_sensor": {
+      "running": {
+        "name": "Running"
+      },
+      "finished": {
+        "name": "Finished"
+      }
+    },
+    "button": {
+      "start_calibration": {
+        "name": "Start calibration"
+      }
+    }
+  }
+}

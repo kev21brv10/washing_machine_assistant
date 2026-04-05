@@ -1,0 +1,92 @@
+{
+  "title": "Machine a laver intelligente",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurer la machine a laver",
+        "description": "Selectionne les capteurs utilises pour inferer le cycle.",
+        "data": {
+          "name": "Nom",
+          "power_sensor": "Capteur de puissance",
+          "vibration_sensor": "Capteur de vibration",
+          "door_sensor": "Capteur de porte",
+          "start_power_w": "Seuil de demarrage (W)",
+          "stop_power_w": "Seuil d'arret (W)",
+          "high_power_w": "Seuil de chauffe (W)",
+          "finish_grace_minutes": "Delai avant fin de cycle (min)",
+          "reset_finished_minutes": "Duree de maintien de l'etat fini (min)",
+          "update_interval_seconds": "Intervalle de rafraichissement (s)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigurer la machine a laver",
+        "data": {
+          "name": "Nom",
+          "power_sensor": "Capteur de puissance",
+          "vibration_sensor": "Capteur de vibration",
+          "door_sensor": "Capteur de porte",
+          "start_power_w": "Seuil de demarrage (W)",
+          "stop_power_w": "Seuil d'arret (W)",
+          "high_power_w": "Seuil de chauffe (W)",
+          "finish_grace_minutes": "Delai avant fin de cycle (min)",
+          "reset_finished_minutes": "Duree de maintien de l'etat fini (min)",
+          "update_interval_seconds": "Intervalle de rafraichissement (s)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Ce capteur de puissance est deja configure."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options de la machine a laver",
+        "data": {
+          "name": "Nom",
+          "power_sensor": "Capteur de puissance",
+          "vibration_sensor": "Capteur de vibration",
+          "door_sensor": "Capteur de porte",
+          "start_power_w": "Seuil de demarrage (W)",
+          "stop_power_w": "Seuil d'arret (W)",
+          "high_power_w": "Seuil de chauffe (W)",
+          "finish_grace_minutes": "Delai avant fin de cycle (min)",
+          "reset_finished_minutes": "Duree de maintien de l'etat fini (min)",
+          "update_interval_seconds": "Intervalle de rafraichissement (s)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Statut"
+      },
+      "phase": {
+        "name": "Phase"
+      },
+      "program": {
+        "name": "Programme probable"
+      },
+      "remaining_time": {
+        "name": "Temps restant"
+      },
+      "finish_time": {
+        "name": "Heure de fin"
+      }
+    },
+    "binary_sensor": {
+      "running": {
+        "name": "En cours"
+      },
+      "finished": {
+        "name": "Termine"
+      }
+    },
+    "button": {
+      "start_calibration": {
+        "name": "Demarrer calibration"
+      }
+    }
+  }
+}

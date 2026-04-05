@@ -1,0 +1,13 @@
+{
+  "domain": "washing_machine_assistant",
+  "name": "Machine a laver intelligente",
+  "version": "0.1.0",
+  "documentation": "https://github.com/kev21brv10/washing_machine_assistant",
+  "issue_tracker": "https://github.com/kev21brv10/washing_machine_assistant/issues",
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "requirements": [],
+  "codeowners": ["@kev21brv10"],
+  "loggers": ["custom_components.washing_machine_assistant"],
+  "integration_type": "service"
+}
