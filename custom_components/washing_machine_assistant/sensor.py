@@ -21,6 +21,12 @@ class WashingMachineSensorDescription(SensorEntityDescription):
 
 SENSORS: tuple[WashingMachineSensorDescription, ...] = (
     WashingMachineSensorDescription(
+        key="calibration_status",
+        translation_key="calibration_status",
+        value_key="calibration_status",
+        icon="mdi:record-rec",
+    ),
+    WashingMachineSensorDescription(
         key="status",
         translation_key="status",
         value_key="status",
@@ -85,6 +91,8 @@ class WashingMachineSensor(CoordinatorEntity[WashingMachineCoordinator], SensorE
 
     @property
     def native_value(self):
+        if self.entity_description.value_key == "calibration_status":
+            return self.coordinator.calibration_status_label
         return getattr(self.coordinator.data, self.entity_description.value_key)
 
     @property
@@ -101,6 +109,7 @@ class WashingMachineSensor(CoordinatorEntity[WashingMachineCoordinator], SensorE
             "last_activity_at": data.last_activity_at,
             "observed_peak_power_w": data.observed_peak_power_w,
             "calibration_state": self.coordinator.calibration_state,
+            "calibration_status": self.coordinator.calibration_status_label,
             "learned_modes_count": len(self.coordinator.learned_profiles),
             "learned_modes": self.coordinator.learned_modes_summary,
             "last_calibrated_mode": None

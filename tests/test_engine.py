@@ -97,6 +97,34 @@ class WashingMachineInferenceEngineTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "idle")
 
+    def test_cycle_stays_running_below_start_threshold_until_stop_threshold_is_crossed(self) -> None:
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 12.0, False, None),
+                (4, 4.0, False, None),
+                (8, 4.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, "running")
+        self.assertEqual(result.phase, "cooldown")
+
+    def test_cycle_finishes_after_finish_grace_once_power_drops_below_stop_threshold(self) -> None:
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 12.0, False, None),
+                (4, 4.0, False, None),
+                (6, 2.0, False, None),
+                (12, 2.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, "finished")
+
     def test_learned_profile_is_selected_when_duration_matches(self) -> None:
         self.engine.set_learned_profiles(
             [

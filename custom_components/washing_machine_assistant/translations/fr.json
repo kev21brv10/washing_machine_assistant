@@ -59,6 +59,9 @@
   },
   "entity": {
     "sensor": {
+      "calibration_status": {
+        "name": "Statut calibration"
+      },
       "status": {
         "name": "Statut"
       },

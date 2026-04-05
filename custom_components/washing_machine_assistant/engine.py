@@ -188,7 +188,8 @@ class WashingMachineInferenceEngine:
                 diagnostics={"reason": "power_sensor_unavailable"},
             )
 
-        is_active = power_w >= self._start_power_w or telemetry.vibration_on
+        is_start_candidate = power_w >= self._start_power_w or telemetry.vibration_on
+        is_active = power_w >= self._stop_power_w or telemetry.vibration_on
 
         if self._completed_result is not None:
             if telemetry.door_open:
@@ -197,14 +198,14 @@ class WashingMachineInferenceEngine:
             elif self._completed_at and now - self._completed_at >= self._reset_finished_after:
                 self._completed_result = None
                 self._completed_at = None
-            elif is_active:
+            elif is_start_candidate:
                 self._completed_result = None
                 self._completed_at = None
             else:
                 return self._completed_result
 
         if self._cycle_started_at is None:
-            if is_active:
+            if is_start_candidate:
                 if self._pending_start_since is None:
                     self._pending_start_since = now
                 elif now - self._pending_start_since >= self._start_confirmation:
@@ -484,6 +485,9 @@ class WashingMachineInferenceEngine:
             "start_power_w": round(max(4.0, min(40.0, max(8.0, min(active_samples) * 0.7))), 1) if active_samples else None,
             "stop_power_w": round(max(1.0, min(15.0, min(trimmed_power_samples) + 1.0)), 1) if trimmed_power_samples else None,
         }
+
+    def build_cycle_signature(self, power_samples: list[float], vibration_samples: list[bool]) -> dict[str, Any]:
+        return self._build_cycle_signature(power_samples, vibration_samples)
 
     def _trim_idle_tail(
         self,

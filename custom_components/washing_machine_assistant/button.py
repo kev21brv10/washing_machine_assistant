@@ -50,6 +50,7 @@ class WashingMachineButton(CoordinatorEntity[WashingMachineCoordinator], ButtonE
         profile = self.coordinator.last_calibrated_profile
         return {
             "calibration_state": self.coordinator.calibration_state,
+            "calibration_status": self.coordinator.calibration_status_label,
             "learned_modes_count": len(self.coordinator.learned_profiles),
             "last_calibrated_mode": None if profile is None else profile.label,
         }

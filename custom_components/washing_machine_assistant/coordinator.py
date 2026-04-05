@@ -54,6 +54,9 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._calibration_armed = False
         self._calibration_active = False
         self._calibration_started_at = None
+        self._calibration_cycle_started_at = None
+        self._calibration_power_samples: list[float] = []
+        self._calibration_vibration_samples: list[bool] = []
         self._last_calibrated_profile: ProgramProfile | None = None
         self._last_calibrated_at = None
         self._last_auto_learned_profile: ProgramProfile | None = None
@@ -113,7 +116,7 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
                 door_open=snapshot.door_open,
             )
         )
-        await self._async_handle_learning(result)
+        await self._async_handle_learning(result, snapshot)
         return result
 
     def _read_sources(self) -> SourceSnapshot:
@@ -140,10 +143,16 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         return value in {"on", "open", "true", "home", "detected"}
 
     async def async_start_calibration(self) -> None:
-        self._calibration_armed = True
-        if self.data is not None and self.data.status == STATUS_RUNNING and self.data.cycle_started_at is not None:
-            self._calibration_active = True
-            self._calibration_started_at = self.data.cycle_started_at
+        snapshot = self._read_sources()
+        running_cycle_started_at = None
+        if self.data is not None and self.data.status == STATUS_RUNNING:
+            running_cycle_started_at = self.data.cycle_started_at
+        self._calibration_armed = False
+        self._begin_calibration_capture(
+            started_at=dt_util.utcnow(),
+            cycle_started_at=running_cycle_started_at,
+            snapshot=snapshot,
+        )
         await self.async_request_refresh()
 
     async def async_rename_learned_profile(self, mode_slug: str, new_name: str) -> bool:
@@ -176,11 +185,13 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         await self.async_request_refresh()
         return True
 
-    async def _async_handle_learning(self, result: InferenceResult) -> None:
-        if self._calibration_armed and not self._calibration_active:
+    async def _async_handle_learning(self, result: InferenceResult, snapshot: SourceSnapshot) -> None:
+        if self._calibration_active and self._calibration_cycle_started_at is None:
             if result.status == STATUS_RUNNING and result.cycle_started_at is not None:
-                self._calibration_active = True
-                self._calibration_started_at = result.cycle_started_at
+                self._calibration_cycle_started_at = result.cycle_started_at
+
+        if self._calibration_active:
+            self._append_calibration_sample(snapshot)
 
         cycle_key = self._cycle_key(result)
         if cycle_key is None:
@@ -195,10 +206,10 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         if result.status != "finished":
             return
 
-        if self._calibration_started_at is None:
-            self._calibration_started_at = result.cycle_started_at
+        if self._calibration_cycle_started_at is None:
+            return
 
-        if result.cycle_started_at != self._calibration_started_at:
+        if result.cycle_started_at != self._calibration_cycle_started_at:
             return
 
         profile = self._build_learned_profile(result)
@@ -212,9 +223,7 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         )
         self._last_calibrated_profile = profile
         self._last_calibrated_at = dt_util.utcnow()
-        self._calibration_armed = False
-        self._calibration_active = False
-        self._calibration_started_at = None
+        self._reset_calibration_capture()
         self._last_processed_cycle_key = cycle_key
 
     async def _async_handle_auto_learning(self, result: InferenceResult, cycle_key: str) -> None:
@@ -259,8 +268,25 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         return True
 
     def _build_learned_profile(self, result: InferenceResult) -> ProgramProfile:
-        duration = max(1, result.elapsed_minutes or 0)
-        cycle_signature = result.diagnostics.get("cycle_signature", {})
+        finish_time = result.finish_time or result.last_activity_at or dt_util.utcnow()
+        if self._calibration_started_at is not None:
+            duration = max(1, int((finish_time - self._calibration_started_at).total_seconds() // 60))
+        else:
+            duration = max(1, result.elapsed_minutes or 0)
+
+        if self._calibration_power_samples:
+            cycle_signature = self._engine.build_cycle_signature(
+                self._calibration_power_samples,
+                self._calibration_vibration_samples,
+            )
+            peak_power_w = max(self._calibration_power_samples)
+            heating_threshold = self._adaptive_thresholds.get("high_power_w", self._base_high_power_w)
+            uses_heating = any(sample >= heating_threshold for sample in self._calibration_power_samples)
+        else:
+            cycle_signature = result.diagnostics.get("cycle_signature", {})
+            peak_power_w = result.observed_peak_power_w or None
+            uses_heating = (result.diagnostics.get("high_power_samples", 0) > 0)
+
         base_slug = self._slugify(result.program_label if result.probable_program != PROGRAM_UNKNOWN else "mode_appris")
         if not base_slug:
             base_slug = "mode_appris"
@@ -277,8 +303,8 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             max_duration_min=duration + 12,
             source=PROGRAM_SOURCE_LEARNED,
             sample_count=1,
-            peak_power_w=result.observed_peak_power_w or None,
-            uses_heating=(result.diagnostics.get("high_power_samples", 0) > 0),
+            peak_power_w=peak_power_w,
+            uses_heating=uses_heating,
             avg_power_w=cycle_signature.get("avg_power_w"),
             high_power_ratio=cycle_signature.get("high_power_ratio"),
             spin_ratio=cycle_signature.get("spin_ratio"),
@@ -323,14 +349,50 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             high_power_w=self._adaptive_thresholds.get("high_power_w", self._base_high_power_w),
         )
 
+    def _begin_calibration_capture(
+        self,
+        *,
+        started_at,
+        cycle_started_at,
+        snapshot: SourceSnapshot,
+    ) -> None:
+        self._calibration_active = True
+        self._calibration_started_at = started_at
+        self._calibration_cycle_started_at = cycle_started_at
+        self._calibration_power_samples = []
+        self._calibration_vibration_samples = []
+        self._append_calibration_sample(snapshot)
+
+    def _append_calibration_sample(self, snapshot: SourceSnapshot) -> None:
+        if snapshot.power_w is None:
+            return
+        self._calibration_power_samples.append(snapshot.power_w)
+        self._calibration_vibration_samples.append(snapshot.vibration_on)
+
+    def _reset_calibration_capture(self) -> None:
+        self._calibration_armed = False
+        self._calibration_active = False
+        self._calibration_started_at = None
+        self._calibration_cycle_started_at = None
+        self._calibration_power_samples = []
+        self._calibration_vibration_samples = []
+
     def _update_adaptive_thresholds_from_result(self, result: InferenceResult) -> None:
         cycle_signature = result.diagnostics.get("cycle_signature", {})
         suggested_start = cycle_signature.get("start_power_w")
         suggested_stop = cycle_signature.get("stop_power_w")
         peak_power = result.observed_peak_power_w or 0.0
+        avg_power = cycle_signature.get("avg_power_w") or 0.0
         suggested_heat = None
         if peak_power > 0:
-            suggested_heat = max(400.0, min(2500.0, round(peak_power * 0.6, 1)))
+            suggested_heat = round(
+                max(
+                    peak_power * 0.6,
+                    avg_power * 1.35,
+                    self._adaptive_thresholds.get("start_power_w", self._base_start_power_w) * 4,
+                ),
+                1,
+            )
 
         self._adaptive_thresholds["start_power_w"] = self._merge_threshold(
             self._adaptive_thresholds.get("start_power_w", self._base_start_power_w),
@@ -347,7 +409,7 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._adaptive_thresholds["high_power_w"] = self._merge_threshold(
             self._adaptive_thresholds.get("high_power_w", self._base_high_power_w),
             suggested_heat,
-            minimum=400.0,
+            minimum=40.0,
             maximum=2500.0,
         )
         self._apply_runtime_thresholds()
@@ -372,6 +434,14 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         if self._calibration_armed:
             return "armed"
         return "idle"
+
+    @property
+    def calibration_status_label(self) -> str:
+        if self._calibration_active:
+            return "En cours de calibration"
+        if self._calibration_armed:
+            return "Calibration armee"
+        return "Inactive"
 
     @property
     def learned_profiles(self) -> list[ProgramProfile]:
