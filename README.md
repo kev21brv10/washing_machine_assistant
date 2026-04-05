@@ -1,4 +1,4 @@
-# Machine a laver intelligente
+# 🫧 Machine a laver intelligente
 
 Integration Home Assistant pour suivre une machine a laver a partir des capteurs deja presents dans HA, sans API constructeur.
 
@@ -17,7 +17,7 @@ L'integration expose:
 - un temps restant estime
 - une heure de fin estimee
 
-## Limite importante
+## ⚠️ Limite importante
 
 Le mode exact d'une machine a laver ne peut pas etre determine de maniere parfaitement fiable a partir de la seule puissance.
 
@@ -35,7 +35,7 @@ La precision depend directement:
 - du comportement reel de la machine
 - de la qualite des cycles appris
 
-## Installation
+## 🚀 Installation
 
 1. Copier `custom_components/washing_machine_assistant` dans `config/custom_components`
 2. Redemarrer Home Assistant
@@ -51,7 +51,7 @@ Au premier ajout, le flow principal reste volontairement simple:
 
 Les seuils avances restent disponibles ensuite dans les options de l'integration si tu veux reprendre la main.
 
-## Reglages avances
+## ⚙️ Reglages avances
 
 En usage normal, il n'est pas necessaire de tout regler au premier demarrage:
 
@@ -74,7 +74,7 @@ Point important:
 - `stop_power_w` sert a reconnaitre la vraie fin du cycle
 - la calibration n'est donc pas stoppee au premier creux de puissance
 
-## Entites exposees
+## 🧩 Entites exposees
 
 Les noms visibles dans Home Assistant dependent de la langue de l'interface. En francais, tu verras typiquement:
 
@@ -90,7 +90,7 @@ Les noms visibles dans Home Assistant dependent de la langue de l'interface. En 
 
 Si ton interface HA est dans une autre langue, les `entity_id` peuvent differer.
 
-## Etats visibles
+## 👀 Etats visibles
 
 L'interface affiche maintenant des libelles francais, par exemple:
 
@@ -110,7 +110,7 @@ Des libelles supplementaires sont aussi exposes:
 - `confidence_label`
 - `program_source_label`
 
-## Calibration
+## 🎯 Calibration
 
 La calibration sert a enregistrer un vrai cycle de ta machine.
 
@@ -139,7 +139,7 @@ Attributs utiles pendant la calibration:
 - `learned_modes`
 - `match_score`
 
-## Detection du mode le plus proche
+## 🧠 Detection du mode le plus proche
 
 L'integration ne cherche pas un mode exact. Elle cherche le cycle appris ou integre le plus proche a partir de:
 
@@ -156,7 +156,7 @@ Le resultat expose notamment:
 - `match_score`
 - `program_source` / `program_source_label`
 
-## Apprentissage progressif
+## 📈 Apprentissage progressif
 
 Le fonctionnement vise ce flux:
 
@@ -179,7 +179,7 @@ L'integration peut aussi ajuster progressivement ses seuils runtime a partir des
 
 Les valeurs configurees restent la base initiale. Les valeurs adaptees sont exposees dans `adaptive_thresholds`.
 
-## Tolerance aux coupures de prise
+## 🔌 Tolerance aux coupures de prise
 
 Si le capteur de puissance passe brievement en `unavailable`, l'integration peut reutiliser temporairement la derniere valeur valide au lieu de casser le cycle.
 
@@ -188,7 +188,7 @@ Attributs utiles:
 - `power_source`: `live`, `cached` ou `missing`
 - `power_unavailable_seconds`
 
-## Renommer un mode appris
+## ✏️ Renommer un mode appris
 
 Tu peux renommer un mode appris via le service:
 
@@ -202,7 +202,7 @@ Champs:
 
 Le `slug` du mode est visible dans l'attribut `learned_modes` du capteur programme.
 
-## Conseils pratiques
+## ✅ Conseils pratiques
 
 Pour fiabiliser le programme probable:
 
@@ -211,7 +211,7 @@ Pour fiabiliser le programme probable:
 3. verifier de temps en temps `learned_modes` et `adaptive_thresholds`
 4. ajouter un capteur de vibration ou de porte si tu veux encore plus de robustesse
 
-## Tests locaux
+## 🧪 Tests locaux
 
 ```bash
 python3 -m unittest discover -s tests
