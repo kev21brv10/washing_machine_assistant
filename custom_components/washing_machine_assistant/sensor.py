@@ -104,6 +104,8 @@ class WashingMachineSensor(CoordinatorEntity[WashingMachineCoordinator], SensorE
             "program_slug": data.probable_program,
             "program_source": data.program_source,
             "power_w": data.power_w,
+            "power_source": data.diagnostics.get("power_source"),
+            "power_unavailable_seconds": data.diagnostics.get("power_unavailable_seconds", 0),
             "elapsed_minutes": data.elapsed_minutes,
             "cycle_started_at": data.cycle_started_at,
             "last_activity_at": data.last_activity_at,

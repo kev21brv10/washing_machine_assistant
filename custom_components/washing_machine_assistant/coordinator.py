@@ -43,6 +43,8 @@ class SourceSnapshot:
     power_w: float | None
     vibration_on: bool
     door_open: bool | None
+    power_source: str = "live"
+    power_unavailable_seconds: int = 0
 
 
 class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
@@ -67,6 +69,8 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._base_stop_power_w = float(entry.options.get(CONF_STOP_POWER_W, entry.data.get(CONF_STOP_POWER_W, DEFAULT_STOP_POWER_W)))
         self._base_high_power_w = float(entry.options.get(CONF_HIGH_POWER_W, entry.data.get(CONF_HIGH_POWER_W, DEFAULT_HIGH_POWER_W)))
         self._adaptive_thresholds: dict[str, float] = {}
+        self._last_live_power_w: float | None = None
+        self._last_live_power_at = None
         self._engine = WashingMachineInferenceEngine(
             start_power_w=self._base_start_power_w,
             stop_power_w=self._base_stop_power_w,
@@ -98,6 +102,7 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             name=f"{DOMAIN}_{entry.entry_id}",
             update_interval=update_interval,
         )
+        self._power_fallback_ttl = max(timedelta(seconds=90), update_interval * 4)
 
     async def async_initialize(self) -> None:
         payload = await self._storage.async_load()
@@ -107,19 +112,29 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._apply_runtime_thresholds()
 
     async def _async_update_data(self) -> InferenceResult:
-        snapshot = self._read_sources()
+        now = dt_util.utcnow()
+        snapshot = self._read_sources(now)
         result = self._engine.update(
             MachineTelemetry(
-                timestamp=dt_util.utcnow(),
+                timestamp=now,
                 power_w=snapshot.power_w,
                 vibration_on=snapshot.vibration_on,
                 door_open=snapshot.door_open,
             )
         )
+        result = replace(
+            result,
+            diagnostics={
+                **result.diagnostics,
+                "power_source": snapshot.power_source,
+                "power_unavailable_seconds": snapshot.power_unavailable_seconds,
+            },
+        )
         await self._async_handle_learning(result, snapshot)
         return result
 
-    def _read_sources(self) -> SourceSnapshot:
+    def _read_sources(self, now=None) -> SourceSnapshot:
+        now = now or dt_util.utcnow()
         power_state = self.hass.states.get(self.entry.data[CONF_POWER_SENSOR])
         vibration_state = self.hass.states.get(self.entry.data.get(CONF_VIBRATION_SENSOR, ""))
         door_state = self.hass.states.get(self.entry.data.get(CONF_DOOR_SENSOR, ""))
@@ -127,7 +142,25 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         power_w = self._parse_float_state(power_state.state if power_state else None)
         vibration_on = self._parse_bool_state(vibration_state.state if vibration_state else None)
         door_open = None if door_state is None else self._parse_bool_state(door_state.state)
-        return SourceSnapshot(power_w=power_w, vibration_on=vibration_on, door_open=door_open)
+        if power_w is not None:
+            self._last_live_power_w = power_w
+            self._last_live_power_at = now
+            return SourceSnapshot(power_w=power_w, vibration_on=vibration_on, door_open=door_open)
+
+        if (
+            self._last_live_power_w is not None
+            and self._last_live_power_at is not None
+            and now - self._last_live_power_at <= self._power_fallback_ttl
+        ):
+            return SourceSnapshot(
+                power_w=self._last_live_power_w,
+                vibration_on=vibration_on,
+                door_open=door_open,
+                power_source="cached",
+                power_unavailable_seconds=int((now - self._last_live_power_at).total_seconds()),
+            )
+
+        return SourceSnapshot(power_w=None, vibration_on=vibration_on, door_open=door_open, power_source="missing")
 
     @staticmethod
     def _parse_float_state(value: str | None) -> float | None:
