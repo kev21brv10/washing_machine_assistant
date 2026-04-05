@@ -62,7 +62,7 @@ async def _handle_rename_learned_mode(call: ServiceCall) -> None:
         new_name=call.data["new_name"],
     )
     if not renamed:
-        raise HomeAssistantError(f"Learned mode not found: {call.data['mode_slug']}")
+        raise HomeAssistantError(f"Mode appris introuvable : {call.data['mode_slug']}")
 
 
 def _resolve_coordinator(hass: HomeAssistant, entity_id: str | None) -> "WashingMachineCoordinator":
@@ -71,19 +71,21 @@ def _resolve_coordinator(hass: HomeAssistant, entity_id: str | None) -> "Washing
 
     coordinators = list(hass.data.get(DOMAIN, {}).values())
     if not coordinators:
-        raise HomeAssistantError("No washing machine assistant entry is loaded")
+        raise HomeAssistantError("Aucune integration Machine a laver intelligente n'est chargee")
 
     if entity_id is None:
         if len(coordinators) == 1:
             return coordinators[0]
-        raise HomeAssistantError("entity_id is required when multiple washing machine entries exist")
+        raise HomeAssistantError(
+            "entity_id est obligatoire quand plusieurs integrations Machine a laver intelligente existent"
+        )
 
     entity_registry = er.async_get(hass)
     entity_entry = entity_registry.async_get(entity_id)
     if entity_entry is None:
-        raise HomeAssistantError(f"Unknown entity_id: {entity_id}")
+        raise HomeAssistantError(f"entity_id inconnue : {entity_id}")
 
     coordinator = hass.data.get(DOMAIN, {}).get(entity_entry.config_entry_id)
     if coordinator is None:
-        raise HomeAssistantError(f"No coordinator found for entity_id: {entity_id}")
+        raise HomeAssistantError(f"Aucun coordinateur trouve pour entity_id : {entity_id}")
     return coordinator

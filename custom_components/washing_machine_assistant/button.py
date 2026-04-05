@@ -61,5 +61,5 @@ class WashingMachineButton(CoordinatorEntity[WashingMachineCoordinator], ButtonE
             identifiers={(DOMAIN, self._entry.entry_id)},
             name=self._entry.title,
             manufacturer="Custom",
-            model="Washing Machine Assistant",
+            model="Machine a laver intelligente",
         )

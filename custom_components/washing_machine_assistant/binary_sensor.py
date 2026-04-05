@@ -76,5 +76,5 @@ class WashingMachineBinarySensor(CoordinatorEntity[WashingMachineCoordinator], B
             identifiers={(DOMAIN, self._entry.entry_id)},
             name=self._entry.title,
             manufacturer="Custom",
-            model="Washing Machine Assistant",
+            model="Machine a laver intelligente",
         )

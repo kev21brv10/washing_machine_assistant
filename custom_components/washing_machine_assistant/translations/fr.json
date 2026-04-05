@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Configurer la machine a laver",
-        "description": "Selectionne les capteurs utilises pour inferer le cycle.",
+        "description": "Selectionne les capteurs utilises pour inferer le cycle. Les seuils avances restent modifiables ensuite dans les options.",
         "data": {
           "name": "Nom",
           "power_sensor": "Capteur de puissance",
@@ -20,6 +20,7 @@
       },
       "reconfigure": {
         "title": "Reconfigurer la machine a laver",
+        "description": "Met a jour les capteurs principaux. Les seuils avances restent disponibles dans les options.",
         "data": {
           "name": "Nom",
           "power_sensor": "Capteur de puissance",
@@ -41,7 +42,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Options de la machine a laver",
+        "title": "Options avancees de la machine a laver",
         "data": {
           "name": "Nom",
           "power_sensor": "Capteur de puissance",

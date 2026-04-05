@@ -174,7 +174,7 @@ class WashingMachineInferenceEngine:
                 status=STATUS_UNAVAILABLE,
                 phase=PHASE_UNKNOWN,
                 probable_program=PROGRAM_UNKNOWN,
-                program_label="Unknown",
+                program_label="Inconnu",
                 program_source="builtin",
                 confidence=CONFIDENCE_LOW,
                 match_score=None,
@@ -319,7 +319,7 @@ class WashingMachineInferenceEngine:
             status=STATUS_IDLE,
             phase=PHASE_IDLE,
             probable_program=PROGRAM_UNKNOWN,
-            program_label="Unknown",
+            program_label="Inconnu",
             program_source="builtin",
             confidence=CONFIDENCE_LOW,
             match_score=None,
@@ -545,7 +545,7 @@ class WashingMachineInferenceEngine:
     def _unknown_profile() -> ProgramProfile:
         return ProgramProfile(
             slug=PROGRAM_UNKNOWN,
-            label="Unknown",
+            label="Inconnu",
             min_duration_min=0,
             typical_duration_min=0,
             max_duration_min=0,

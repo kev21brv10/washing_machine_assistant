@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Configure washing machine",
-        "description": "Select the sensors used to infer the cycle.",
+        "description": "Select the sensors used to infer the cycle. Advanced thresholds remain available later in options.",
         "data": {
           "name": "Name",
           "power_sensor": "Power sensor",
@@ -20,6 +20,7 @@
       },
       "reconfigure": {
         "title": "Reconfigure washing machine",
+        "description": "Update the main sensors. Advanced thresholds remain available in options.",
         "data": {
           "name": "Name",
           "power_sensor": "Power sensor",
@@ -41,7 +42,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Washing machine options",
+        "title": "Advanced washing machine options",
         "data": {
           "name": "Name",
           "power_sensor": "Power sensor",

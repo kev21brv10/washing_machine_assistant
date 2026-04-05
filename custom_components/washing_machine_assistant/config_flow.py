@@ -31,7 +31,25 @@ def _d(value):
     return value if value is not None else vol.UNDEFINED
 
 
-def build_schema(current: dict | None = None) -> vol.Schema:
+def build_basic_schema(current: dict | None = None) -> vol.Schema:
+    current = current or {}
+    return vol.Schema(
+        {
+            vol.Optional(CONF_NAME, default=_d(current.get(CONF_NAME, DEFAULT_NAME))): selector.TextSelector(),
+            vol.Required(CONF_POWER_SENSOR, default=_d(current.get(CONF_POWER_SENSOR))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Optional(CONF_VIBRATION_SENSOR, default=_d(current.get(CONF_VIBRATION_SENSOR))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="binary_sensor")
+            ),
+            vol.Optional(CONF_DOOR_SENSOR, default=_d(current.get(CONF_DOOR_SENSOR))): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="binary_sensor")
+            ),
+        }
+    )
+
+
+def build_advanced_schema(current: dict | None = None) -> vol.Schema:
     current = current or {}
     return vol.Schema(
         {
@@ -96,14 +114,14 @@ class WashingMachineConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             title = user_input.get(CONF_NAME) or DEFAULT_NAME
             return self.async_create_entry(title=title, data=user_input)
 
-        return self.async_show_form(step_id="user", data_schema=build_schema())
+        return self.async_show_form(step_id="user", data_schema=build_basic_schema())
 
     async def async_step_reconfigure(self, user_input=None):
         entry = self._get_reconfigure_entry()
         current = {**entry.data, **entry.options}
         if user_input is not None:
             return self.async_update_reload_and_abort(entry, data_updates=user_input)
-        return self.async_show_form(step_id="reconfigure", data_schema=build_schema(current))
+        return self.async_show_form(step_id="reconfigure", data_schema=build_basic_schema(current))
 
     @staticmethod
     def async_get_options_flow(entry: config_entries.ConfigEntry):
@@ -118,4 +136,4 @@ class WashingMachineOptionsFlow(config_entries.OptionsFlow):
         current = {**self.entry.data, **self.entry.options}
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
-        return self.async_show_form(step_id="init", data_schema=build_schema(current))
+        return self.async_show_form(step_id="init", data_schema=build_advanced_schema(current))
