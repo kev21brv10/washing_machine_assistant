@@ -193,6 +193,38 @@ class WashingMachineInferenceEngineTests(unittest.TestCase):
         self.assertEqual(result.probable_program, "learned_mix_60")
         self.assertEqual(result.program_source, "learned")
 
+    def test_unknown_is_returned_when_no_learned_profile_is_close_enough(self) -> None:
+        self.engine.set_learned_profiles(
+            [
+                ProgramProfile(
+                    slug="learned_court",
+                    label="Court",
+                    min_duration_min=30,
+                    typical_duration_min=35,
+                    max_duration_min=42,
+                    source="learned",
+                    sample_count=1,
+                    peak_power_w=250.0,
+                    uses_heating=False,
+                )
+            ]
+        )
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 15.0, False, None),
+                (8, 1880.0, False, None),
+                (25, 220.0, False, None),
+                (45, 180.0, False, None),
+                (60, 140.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.probable_program, "unknown")
+        self.assertEqual(result.program_label, "Inconnu")
+        self.assertIsNotNone(result.match_score)
+
     def test_closest_learned_profile_uses_signature_and_score(self) -> None:
         self.engine.set_learned_profiles(
             [
@@ -336,15 +368,191 @@ class WashingMachineInferenceEngineTests(unittest.TestCase):
         self.assertEqual(profile.slug, learned.slug)
         self.assertEqual(score, 44.0)
 
+    def test_stability_lock_resists_switches_between_learned_profiles_mid_cycle(self) -> None:
+        mix = ProgramProfile(
+            slug="learned_mix",
+            label="MIX",
+            min_duration_min=60,
+            typical_duration_min=66,
+            max_duration_min=74,
+            source="learned",
+        )
+        coton = ProgramProfile(
+            slug="learned_coton",
+            label="Coton",
+            min_duration_min=40,
+            typical_duration_min=48,
+            max_duration_min=58,
+            source="learned",
+        )
+        self.engine._learned_profiles = (mix, coton)  # type: ignore[attr-defined]
+        self.engine._locked_profile_slug = mix.slug  # type: ignore[attr-defined]
+        self.engine._locked_profile_score = 28.0  # type: ignore[attr-defined]
+
+        profile, score = self.engine._stabilize_program_choice(  # type: ignore[attr-defined]
+            elapsed_minutes=45,
+            candidate_profile=coton,
+            candidate_score=14.0,
+            scores_by_slug={
+                mix.slug: 28.0,
+                coton.slug: 14.0,
+            },
+        )
+        self.assertEqual(profile.slug, mix.slug)
+        self.assertEqual(score, 28.0)
+
+    def test_phase_hysteresis_prevents_single_sample_flips_between_washing_and_cooldown(self) -> None:
+        self.engine._locked_phase = "washing"  # type: ignore[attr-defined]
+
+        first = self.engine._stabilize_phase("cooldown")  # type: ignore[attr-defined]
+        second = self.engine._stabilize_phase("washing")  # type: ignore[attr-defined]
+        third = self.engine._stabilize_phase("cooldown")  # type: ignore[attr-defined]
+
+        self.assertEqual(first, "washing")
+        self.assertEqual(second, "washing")
+        self.assertEqual(third, "washing")
+
+    def test_spinning_is_detected_from_late_power_ramp_without_vibration_sensor(self) -> None:
+        self.engine.set_learned_profiles(
+            [
+                ProgramProfile(
+                    slug="learned_mix",
+                    label="MIX",
+                    min_duration_min=60,
+                    typical_duration_min=66,
+                    max_duration_min=74,
+                    source="learned",
+                    sample_count=1,
+                    peak_power_w=1990.0,
+                    uses_heating=True,
+                )
+            ]
+        )
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 15.0, False, None),
+                (8, 1880.0, False, None),
+                (20, 85.0, False, None),
+                (30, 95.0, False, None),
+                (40, 70.0, False, None),
+                (50, 110.0, False, None),
+                (54, 170.0, False, None),
+                (56, 210.0, False, None),
+                (58, 260.0, False, None),
+                (60, 320.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.phase, "spinning")
+
+    def test_mid_cycle_power_bump_does_not_become_spinning_too_early(self) -> None:
+        self.engine.set_learned_profiles(
+            [
+                ProgramProfile(
+                    slug="learned_mix",
+                    label="MIX",
+                    min_duration_min=60,
+                    typical_duration_min=66,
+                    max_duration_min=74,
+                    source="learned",
+                    sample_count=1,
+                    peak_power_w=1990.0,
+                    uses_heating=True,
+                )
+            ]
+        )
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 15.0, False, None),
+                (8, 1880.0, False, None),
+                (20, 85.0, False, None),
+                (24, 180.0, False, None),
+                (26, 210.0, False, None),
+                (28, 160.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertNotEqual(result.phase, "spinning")
+
+    def test_late_cycle_medium_power_is_classified_as_rinsing(self) -> None:
+        self.engine.set_learned_profiles(
+            [
+                ProgramProfile(
+                    slug="learned_mix",
+                    label="MIX",
+                    min_duration_min=60,
+                    typical_duration_min=66,
+                    max_duration_min=74,
+                    source="learned",
+                    sample_count=1,
+                    peak_power_w=1990.0,
+                    uses_heating=True,
+                )
+            ]
+        )
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 15.0, False, None),
+                (8, 1880.0, False, None),
+                (20, 120.0, False, None),
+                (35, 110.0, False, None),
+                (45, 75.0, False, None),
+                (52, 40.0, False, None),
+                (54, 38.0, False, None),
+                (56, 36.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.phase, "rinsing")
+
+    def test_late_cycle_low_power_is_classified_as_cooldown(self) -> None:
+        self.engine.set_learned_profiles(
+            [
+                ProgramProfile(
+                    slug="learned_mix",
+                    label="MIX",
+                    min_duration_min=60,
+                    typical_duration_min=66,
+                    max_duration_min=74,
+                    source="learned",
+                    sample_count=1,
+                    peak_power_w=1990.0,
+                    uses_heating=True,
+                )
+            ]
+        )
+        result = self._run_samples(
+            [
+                (0, 0.0, False, None),
+                (1, 12.0, False, None),
+                (2, 15.0, False, None),
+                (8, 1880.0, False, None),
+                (20, 120.0, False, None),
+                (35, 90.0, False, None),
+                (50, 24.0, False, None),
+                (58, 8.0, False, None),
+                (60, 7.0, False, None),
+                (62, 6.0, False, None),
+            ]
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.phase, "cooldown")
+
     def test_remaining_time_is_smoothed_instead_of_jumping_wildly(self) -> None:
         self.engine.set_learned_profiles(
             [
                 ProgramProfile(
-                    slug="learned_mix_60",
-                    label="Mix 60",
-                    min_duration_min=60,
-                    typical_duration_min=66,
-                    max_duration_min=74,
+                    slug="learned_cycle_long",
+                    label="Cycle long",
+                    min_duration_min=90,
+                    typical_duration_min=102,
+                    max_duration_min=114,
                     source="learned",
                     sample_count=1,
                     peak_power_w=1980.0,

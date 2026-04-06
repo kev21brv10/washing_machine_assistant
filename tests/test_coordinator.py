@@ -287,6 +287,213 @@ class WashingMachineCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.adaptive_thresholds["start_power_w"], 10.6)
         self.assertEqual(coordinator._engine.completed_result.probable_program, "learned_mix_60")
 
+    async def test_initialize_restores_runtime_cycle_and_calibration_state(self) -> None:
+        coordinator = self._build_coordinator({"sensor.machine_power": "120"})
+        cycle_started_at = datetime(2026, 4, 5, 17, 15, tzinfo=timezone.utc)
+        coordinator._storage.async_load = AsyncMock(
+            return_value={
+                "runtime_state": {
+                    "cycle_started_at": cycle_started_at.isoformat(),
+                    "last_activity_at": (cycle_started_at + timedelta(minutes=20)).isoformat(),
+                    "inactive_since": None,
+                    "observed_peak_power_w": 1988.0,
+                    "high_power_samples": 15,
+                    "spin_like_samples": 0,
+                    "power_window": [55.0, 72.0, 94.0],
+                    "cycle_power_samples": [0.0, 12.0, 15.0, 1880.0, 95.0],
+                    "cycle_vibration_samples": [False, False, False, False, False],
+                    "locked_profile_slug": "learned_mix_60",
+                    "locked_profile_score": 22.0,
+                    "best_candidate_slug": "learned_mix_60",
+                    "best_candidate_score": 22.0,
+                    "locked_phase": "washing",
+                    "pending_phase": None,
+                    "pending_phase_count": 0,
+                    "estimated_total_minutes": 66,
+                },
+                "calibration_state": {
+                    "active": True,
+                    "started_at": cycle_started_at.isoformat(),
+                    "cycle_started_at": cycle_started_at.isoformat(),
+                    "power_samples": [0.0, 12.0, 15.0, 1880.0],
+                    "vibration_samples": [False, False, False, False],
+                },
+                "last_processed_cycle_key": "learned_mix_60|2026-04-05T18:20:38+00:00",
+            }
+        )
+
+        await coordinator.async_initialize()
+
+        runtime = coordinator._engine.export_runtime_state()
+        self.assertIsNotNone(runtime)
+        self.assertEqual(runtime["cycle_started_at"], cycle_started_at)
+        self.assertEqual(runtime["locked_profile_slug"], "learned_mix_60")
+        self.assertEqual(coordinator.calibration_state, "recording")
+        self.assertEqual(coordinator._calibration_power_samples, [0.0, 12.0, 15.0, 1880.0])
+        self.assertEqual(coordinator._last_processed_cycle_key, "learned_mix_60|2026-04-05T18:20:38+00:00")
+
+    async def test_finished_unknown_cycle_creates_new_learned_profile_automatically(self) -> None:
+        coordinator = self._build_coordinator({"sensor.machine_power": "0"})
+        coordinator._learned_profiles = [
+            ProgramProfile(
+                slug="learned_mix_60",
+                label="Mix 60°",
+                min_duration_min=54,
+                typical_duration_min=66,
+                max_duration_min=78,
+                source="learned",
+                sample_count=1,
+            )
+        ]
+        coordinator._engine.set_learned_profiles(coordinator._learned_profiles)
+
+        profile = ProgramProfile(
+            slug="learned_mode_auto_2",
+            label="Mode auto 2",
+            min_duration_min=58,
+            typical_duration_min=70,
+            max_duration_min=82,
+            source="learned",
+            sample_count=1,
+        )
+        coordinator._build_learned_profile = lambda result, auto_created=False: profile  # type: ignore[method-assign]
+        coordinator._update_adaptive_thresholds_from_result = lambda result: None  # type: ignore[method-assign]
+
+        finished_at = datetime(2026, 4, 5, 18, 20, 38, tzinfo=timezone.utc)
+        finished_result = InferenceResult(
+            available=True,
+            status=STATUS_FINISHED,
+            phase="finished",
+            probable_program="unknown",
+            program_label="Inconnu",
+            program_source="builtin",
+            confidence="low",
+            match_score=44,
+            power_w=0.0,
+            remaining_minutes=0,
+            finish_time=finished_at,
+            cycle_started_at=finished_at - timedelta(minutes=70),
+            last_activity_at=finished_at,
+            elapsed_minutes=70,
+            observed_peak_power_w=1995.0,
+            diagnostics={
+                "power_source": "live",
+                "cycle_signature": {"signature": [10, 25, 100, 18, 22, 35]},
+                "high_power_samples": 12,
+            },
+        )
+
+        await coordinator._async_handle_learning(
+            finished_result,
+            SourceSnapshot(power_w=0.0, vibration_on=False, door_open=None),
+        )
+
+        self.assertEqual(coordinator.learned_profiles[-1], profile)
+        self.assertEqual(coordinator.last_auto_learned_profile, profile)
+        self.assertIsNotNone(coordinator.last_auto_learned_at)
+        coordinator._storage.async_save.assert_awaited_once()
+
+    async def test_delete_learned_profile_removes_mode_and_clears_last_refs(self) -> None:
+        coordinator = self._build_coordinator({"sensor.machine_power": "0"})
+        profile = ProgramProfile(
+            slug="learned_mix_60",
+            label="Mix 60°",
+            min_duration_min=54,
+            typical_duration_min=66,
+            max_duration_min=78,
+            source="learned",
+            sample_count=1,
+        )
+        coordinator._learned_profiles = [profile]
+        coordinator._last_calibrated_profile = profile
+        coordinator._last_calibrated_at = datetime(2026, 4, 5, 16, 52, tzinfo=timezone.utc)
+
+        deleted = await coordinator.async_delete_learned_profile("learned_mix_60")
+
+        self.assertTrue(deleted)
+        self.assertEqual(coordinator.learned_profiles, [])
+        self.assertIsNone(coordinator.last_calibrated_profile)
+        self.assertIsNone(coordinator.last_calibrated_at)
+        coordinator._storage.async_save.assert_awaited_once()
+
+    async def test_merge_learned_profiles_keeps_target_and_combines_samples(self) -> None:
+        coordinator = self._build_coordinator({"sensor.machine_power": "0"})
+        target = ProgramProfile(
+            slug="learned_mix",
+            label="MIX",
+            min_duration_min=60,
+            typical_duration_min=66,
+            max_duration_min=78,
+            source="learned",
+            sample_count=2,
+            peak_power_w=1900.0,
+            uses_heating=True,
+        )
+        source = ProgramProfile(
+            slug="learned_mix_40",
+            label="Mix 40",
+            min_duration_min=54,
+            typical_duration_min=60,
+            max_duration_min=72,
+            source="learned",
+            sample_count=1,
+            peak_power_w=1750.0,
+            uses_heating=True,
+        )
+        coordinator._learned_profiles = [target, source]
+
+        merged = await coordinator.async_merge_learned_profiles("learned_mix_40", "learned_mix")
+
+        self.assertTrue(merged)
+        self.assertEqual(len(coordinator.learned_profiles), 1)
+        self.assertEqual(coordinator.learned_profiles[0].slug, "learned_mix")
+        self.assertEqual(coordinator.learned_profiles[0].sample_count, 3)
+        coordinator._storage.async_save.assert_awaited_once()
+
+    async def test_confirm_learned_profile_reinforces_last_completed_cycle(self) -> None:
+        coordinator = self._build_coordinator({"sensor.machine_power": "0"})
+        profile = ProgramProfile(
+            slug="learned_mix",
+            label="MIX",
+            min_duration_min=60,
+            typical_duration_min=66,
+            max_duration_min=78,
+            source="learned",
+            sample_count=1,
+        )
+        coordinator._learned_profiles = [profile]
+        coordinator._engine.set_learned_profiles(coordinator._learned_profiles)
+        finished_at = datetime(2026, 4, 5, 18, 20, 38, tzinfo=timezone.utc)
+        coordinator._engine.restore_completed_cycle(
+            InferenceResult(
+                available=True,
+                status=STATUS_FINISHED,
+                phase="finished",
+                probable_program="unknown",
+                program_label="Inconnu",
+                program_source="builtin",
+                confidence="low",
+                match_score=41,
+                power_w=0.0,
+                remaining_minutes=0,
+                finish_time=finished_at,
+                cycle_started_at=finished_at - timedelta(minutes=66),
+                last_activity_at=finished_at,
+                elapsed_minutes=66,
+                observed_peak_power_w=1990.0,
+                diagnostics={"cycle_signature": {"signature": [10, 20, 100, 20, 10, 5]}, "high_power_samples": 12},
+            ),
+            finished_at,
+        )
+
+        confirmed = await coordinator.async_confirm_learned_profile("learned_mix")
+
+        self.assertTrue(confirmed)
+        self.assertEqual(coordinator._engine.completed_result.probable_program, "learned_mix")
+        self.assertEqual(coordinator._engine.completed_result.program_label, "MIX")
+        self.assertEqual(coordinator.last_auto_learned_profile.slug, "learned_mix")
+        coordinator._storage.async_save.assert_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

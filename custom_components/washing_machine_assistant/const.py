@@ -52,3 +52,6 @@ PROGRAM_SOURCE_BUILTIN = "builtin"
 PROGRAM_SOURCE_LEARNED = "learned"
 
 SERVICE_RENAME_LEARNED_MODE = "rename_learned_mode"
+SERVICE_DELETE_LEARNED_MODE = "delete_learned_mode"
+SERVICE_MERGE_LEARNED_MODES = "merge_learned_modes"
+SERVICE_CONFIRM_LEARNED_MODE = "confirm_learned_mode"

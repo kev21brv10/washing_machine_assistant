@@ -140,6 +140,33 @@ class WashingMachineInferenceEngine:
         self._completed_result = result
         self._completed_at = completed_at
 
+    def restore_runtime_state(self, payload: dict[str, Any] | None) -> None:
+        if not isinstance(payload, dict):
+            return
+        cycle_started_at = payload.get("cycle_started_at")
+        if cycle_started_at is None:
+            return
+        self._completed_result = None
+        self._completed_at = None
+        self._cycle_started_at = cycle_started_at
+        self._last_activity_at = payload.get("last_activity_at")
+        self._inactive_since = payload.get("inactive_since")
+        self._pending_start_since = None
+        self._observed_peak_power_w = float(payload.get("observed_peak_power_w", 0.0) or 0.0)
+        self._high_power_samples = int(payload.get("high_power_samples", 0) or 0)
+        self._spin_like_samples = int(payload.get("spin_like_samples", 0) or 0)
+        self._power_window = deque((payload.get("power_window") or [])[-16:], maxlen=16)
+        self._cycle_power_samples = list(payload.get("cycle_power_samples") or [])
+        self._cycle_vibration_samples = [bool(value) for value in (payload.get("cycle_vibration_samples") or [])]
+        self._locked_profile_slug = payload.get("locked_profile_slug")
+        self._locked_profile_score = payload.get("locked_profile_score")
+        self._best_candidate_slug = payload.get("best_candidate_slug")
+        self._best_candidate_score = payload.get("best_candidate_score")
+        self._locked_phase = payload.get("locked_phase")
+        self._pending_phase = payload.get("pending_phase")
+        self._pending_phase_count = int(payload.get("pending_phase_count", 0) or 0)
+        self._estimated_total_minutes = payload.get("estimated_total_minutes")
+
     def set_runtime_thresholds(
         self,
         *,
@@ -153,6 +180,29 @@ class WashingMachineInferenceEngine:
             self._stop_power_w = stop_power_w
         if high_power_w is not None:
             self._high_power_w = high_power_w
+
+    def export_runtime_state(self) -> dict[str, Any] | None:
+        if self._cycle_started_at is None:
+            return None
+        return {
+            "cycle_started_at": self._cycle_started_at,
+            "last_activity_at": self._last_activity_at,
+            "inactive_since": self._inactive_since,
+            "observed_peak_power_w": self._observed_peak_power_w,
+            "high_power_samples": self._high_power_samples,
+            "spin_like_samples": self._spin_like_samples,
+            "power_window": list(self._power_window),
+            "cycle_power_samples": self._cycle_power_samples[-480:],
+            "cycle_vibration_samples": self._cycle_vibration_samples[-480:],
+            "locked_profile_slug": self._locked_profile_slug,
+            "locked_profile_score": self._locked_profile_score,
+            "best_candidate_slug": self._best_candidate_slug,
+            "best_candidate_score": self._best_candidate_score,
+            "locked_phase": self._locked_phase,
+            "pending_phase": self._pending_phase,
+            "pending_phase_count": self._pending_phase_count,
+            "estimated_total_minutes": self._estimated_total_minutes,
+        }
 
     def _reset_runtime(self) -> None:
         self._cycle_started_at: datetime | None = None
@@ -169,6 +219,11 @@ class WashingMachineInferenceEngine:
         self._completed_at: datetime | None = None
         self._locked_profile_slug: str | None = None
         self._locked_profile_score: float | None = None
+        self._best_candidate_slug: str | None = None
+        self._best_candidate_score: float | None = None
+        self._locked_phase: str | None = None
+        self._pending_phase: str | None = None
+        self._pending_phase_count = 0
         self._estimated_total_minutes: int | None = None
 
     def update(self, telemetry: MachineTelemetry) -> InferenceResult:
@@ -261,6 +316,7 @@ class WashingMachineInferenceEngine:
             elapsed_minutes=self._elapsed_minutes(now),
             observed_peak_power_w=self._observed_peak_power_w,
             diagnostics={
+                **self._match_diagnostics(),
                 "high_power_samples": self._high_power_samples,
                 "spin_like_samples": self._spin_like_samples,
                 "pending_finish": self._inactive_since is not None,
@@ -282,6 +338,11 @@ class WashingMachineInferenceEngine:
         self._pending_start_since = None
         self._locked_profile_slug = None
         self._locked_profile_score = None
+        self._best_candidate_slug = None
+        self._best_candidate_score = None
+        self._locked_phase = PHASE_STARTING
+        self._pending_phase = None
+        self._pending_phase_count = 0
         self._estimated_total_minutes = None
 
     def _finish_cycle(self, now: datetime, power_w: float) -> InferenceResult:
@@ -306,6 +367,7 @@ class WashingMachineInferenceEngine:
             elapsed_minutes=self._elapsed_minutes(finished_at),
             observed_peak_power_w=self._observed_peak_power_w,
             diagnostics={
+                **self._match_diagnostics(),
                 "high_power_samples": self._high_power_samples,
                 "spin_like_samples": self._spin_like_samples,
                 "cycle_signature": cycle_signature,
@@ -321,6 +383,11 @@ class WashingMachineInferenceEngine:
         self._high_power_samples = 0
         self._spin_like_samples = 0
         self._power_window.clear()
+        self._best_candidate_slug = None
+        self._best_candidate_score = None
+        self._locked_phase = None
+        self._pending_phase = None
+        self._pending_phase_count = 0
         return result
 
     def _build_idle_result(self, power_w: float) -> InferenceResult:
@@ -350,19 +417,112 @@ class WashingMachineInferenceEngine:
 
     def _infer_phase(self, now: datetime, power_w: float, vibration_on: bool) -> str:
         elapsed = self._elapsed_minutes(now)
-        if elapsed is not None and elapsed < 5 and power_w < self._high_power_w:
-            return PHASE_STARTING
-        if power_w >= self._high_power_w:
-            return PHASE_HEATING
         wash_threshold = max(self._start_power_w * 8, 60)
         rinse_threshold = max(self._start_power_w * 2, 15)
-        if vibration_on and power_w < wash_threshold:
-            return PHASE_SPINNING
-        if power_w >= wash_threshold:
-            return PHASE_WASHING
-        if power_w >= rinse_threshold:
-            return PHASE_RINSING
-        return PHASE_COOLDOWN
+        progress = self._cycle_progress(elapsed)
+        late_cycle = progress is not None and progress >= 0.55
+        final_cycle = progress is not None and progress >= 0.82
+        if late_cycle:
+            wash_threshold = max(wash_threshold, 110.0)
+            rinse_threshold = max(rinse_threshold, 18.0)
+        if elapsed is not None and elapsed < 5 and power_w < self._high_power_w:
+            candidate_phase = PHASE_STARTING
+        elif power_w >= self._high_power_w:
+            candidate_phase = PHASE_HEATING
+        elif self._looks_like_spinning(elapsed, power_w, vibration_on, wash_threshold, rinse_threshold):
+            candidate_phase = PHASE_SPINNING
+        else:
+            if power_w >= wash_threshold:
+                candidate_phase = PHASE_WASHING
+            elif power_w >= rinse_threshold:
+                candidate_phase = PHASE_RINSING
+            elif final_cycle and power_w < max(rinse_threshold, 18.0):
+                candidate_phase = PHASE_COOLDOWN
+            elif late_cycle and power_w >= max(self._stop_power_w, 6.0):
+                candidate_phase = PHASE_RINSING
+            else:
+                candidate_phase = PHASE_COOLDOWN
+        return self._stabilize_phase(candidate_phase)
+
+    def _cycle_progress(self, elapsed: int | None) -> float | None:
+        if elapsed is None or elapsed <= 0:
+            return None
+        estimated_total = self._estimated_total_minutes or self._estimate_total_duration(elapsed, PHASE_WASHING)
+        return elapsed / max(estimated_total, 1)
+
+    def _looks_like_spinning(
+        self,
+        elapsed: int | None,
+        power_w: float,
+        vibration_on: bool,
+        wash_threshold: float,
+        rinse_threshold: float,
+    ) -> bool:
+        if vibration_on and power_w >= max(self._stop_power_w * 3, 20):
+            return True
+        if elapsed is None or elapsed < 20 or self._high_power_samples == 0:
+            return False
+
+        recent_samples = list(self._power_window)[-6:]
+        if len(recent_samples) < 4:
+            return False
+
+        estimated_total = self._estimated_total_minutes or self._estimate_total_duration(elapsed, PHASE_WASHING)
+        progress = elapsed / max(estimated_total, 1)
+        if progress < 0.72:
+            return False
+
+        recent_avg = sum(recent_samples) / len(recent_samples)
+        recent_max = max(recent_samples)
+        recent_min = min(recent_samples)
+        spin_floor = max(wash_threshold * 1.35, 90.0)
+        spin_cap = max(self._high_power_w * 0.55, spin_floor)
+
+        if recent_avg < spin_floor or recent_max > spin_cap:
+            return False
+        if recent_min <= self._stop_power_w:
+            return False
+        if power_w < rinse_threshold * 1.5:
+            return False
+        return True
+
+    def _stabilize_phase(self, candidate_phase: str) -> str:
+        immediate_phases = {PHASE_STARTING, PHASE_HEATING, PHASE_FINISHED, PHASE_IDLE, PHASE_UNKNOWN}
+        if self._locked_phase is None:
+            self._locked_phase = candidate_phase
+            self._pending_phase = None
+            self._pending_phase_count = 0
+            return candidate_phase
+
+        if candidate_phase == self._locked_phase:
+            self._pending_phase = None
+            self._pending_phase_count = 0
+            return candidate_phase
+
+        if candidate_phase in immediate_phases or self._locked_phase in immediate_phases:
+            self._locked_phase = candidate_phase
+            self._pending_phase = None
+            self._pending_phase_count = 0
+            return candidate_phase
+
+        confirmation_needed = 2
+        if {self._locked_phase, candidate_phase} == {PHASE_WASHING, PHASE_RINSING}:
+            confirmation_needed = 3
+        elif candidate_phase == PHASE_COOLDOWN and self._locked_phase in {PHASE_WASHING, PHASE_RINSING}:
+            confirmation_needed = 3
+
+        if self._pending_phase == candidate_phase:
+            self._pending_phase_count += 1
+        else:
+            self._pending_phase = candidate_phase
+            self._pending_phase_count = 1
+
+        if self._pending_phase_count >= confirmation_needed:
+            self._locked_phase = candidate_phase
+            self._pending_phase = None
+            self._pending_phase_count = 0
+
+        return self._locked_phase
 
     def _infer_program(self, now: datetime, phase: str) -> tuple[str, ProgramProfile, str, int | None]:
         if phase == PHASE_FINISHED and self._completed_result is not None:
@@ -432,7 +592,11 @@ class WashingMachineInferenceEngine:
             candidate_score=best_score,
             scores_by_slug=scores_by_slug,
         )
+        self._best_candidate_slug = best_profile.slug
+        self._best_candidate_score = best_score
         match_score = self._score_to_similarity(best_score)
+        if self._learned_profiles and best_profile.source == "learned" and (match_score or 0) < 60:
+            return PROGRAM_UNKNOWN, self._unknown_profile(), CONFIDENCE_LOW, match_score
         confidence = self._confidence_for_program(elapsed, match_score)
         return best_profile.slug, best_profile, confidence, match_score
 
@@ -471,11 +635,15 @@ class WashingMachineInferenceEngine:
         if candidate_profile.source == "learned" and locked_profile.source != "learned":
             switch_margin = 6.0
         elif candidate_profile.source == locked_profile.source == "learned":
-            switch_margin = 8.0
+            switch_margin = 14.0
+            if elapsed_minutes >= 35:
+                switch_margin = 18.0
 
         locked_match = self._score_to_similarity(locked_score)
         if locked_match is not None and locked_match < 45:
             switch_margin = min(switch_margin, 5.0)
+        elif locked_match is not None and locked_match >= 70 and candidate_profile.source == locked_profile.source == "learned":
+            switch_margin += 4.0
 
         if candidate_score + switch_margin < locked_score:
             self._locked_profile_slug = candidate_profile.slug
@@ -631,6 +799,30 @@ class WashingMachineInferenceEngine:
             typical_duration_min=0,
             max_duration_min=0,
         )
+
+    def _match_diagnostics(self) -> dict[str, Any]:
+        return {
+            "locked_program_slug": self._locked_profile_slug,
+            "locked_program_label": self._profile_label(self._locked_profile_slug),
+            "locked_program_score": None
+            if self._locked_profile_score is None
+            else round(self._locked_profile_score, 1),
+            "best_match_slug": self._best_candidate_slug,
+            "best_match_label": self._profile_label(self._best_candidate_slug),
+            "best_match_score": None
+            if self._best_candidate_score is None
+            else round(self._best_candidate_score, 1),
+        }
+
+    def _profile_label(self, slug: str | None) -> str | None:
+        if slug is None:
+            return None
+        if slug == PROGRAM_UNKNOWN:
+            return "Inconnu"
+        for profile in (*self._learned_profiles, *PROGRAM_PROFILES):
+            if profile.slug == slug:
+                return profile.label
+        return slug
 
     def debug_state(self) -> dict[str, Any]:
         return {

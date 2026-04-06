@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     PROGRAM_SOURCE_LEARNED,
     PROGRAM_UNKNOWN,
+    STATUS_FINISHED,
     STATUS_RUNNING,
 )
 from .engine import InferenceResult, MachineTelemetry, ProgramProfile, WashingMachineInferenceEngine
@@ -65,6 +66,7 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._last_auto_learned_at = None
         self._last_processed_cycle_key: str | None = None
         self._auto_learning_min_score = 78
+        self._auto_create_min_duration = 25
         self._base_start_power_w = float(entry.options.get(CONF_START_POWER_W, entry.data.get(CONF_START_POWER_W, DEFAULT_START_POWER_W)))
         self._base_stop_power_w = float(entry.options.get(CONF_STOP_POWER_W, entry.data.get(CONF_STOP_POWER_W, DEFAULT_STOP_POWER_W)))
         self._base_high_power_w = float(entry.options.get(CONF_HIGH_POWER_W, entry.data.get(CONF_HIGH_POWER_W, DEFAULT_HIGH_POWER_W)))
@@ -112,12 +114,15 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._last_calibrated_at = self._storage.parse_datetime(payload.get("last_calibrated_at"))
         self._last_auto_learned_profile = self._profile_by_slug(payload.get("last_auto_learned_slug"))
         self._last_auto_learned_at = self._storage.parse_datetime(payload.get("last_auto_learned_at"))
+        self._last_processed_cycle_key = payload.get("last_processed_cycle_key")
         self._engine.set_learned_profiles(self._learned_profiles)
         self._apply_runtime_thresholds()
         self._engine.restore_completed_cycle(
             self._storage.parse_inference_result(payload),
             self._storage.parse_datetime(payload.get("completed_at")),
         )
+        self._engine.restore_runtime_state(self._storage.parse_runtime_state(payload))
+        self._restore_calibration_state(self._storage.parse_calibration_state(payload))
 
     async def _async_update_data(self) -> InferenceResult:
         now = dt_util.utcnow()
@@ -233,6 +238,85 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         await self.async_request_refresh()
         return True
 
+    async def async_delete_learned_profile(self, mode_slug: str) -> bool:
+        profile = self._profile_by_slug(mode_slug)
+        if profile is None:
+            return False
+
+        self._learned_profiles = [item for item in self._learned_profiles if item.slug != mode_slug]
+        self._engine.set_learned_profiles(self._learned_profiles)
+
+        if self._last_calibrated_profile and self._last_calibrated_profile.slug == mode_slug:
+            self._last_calibrated_profile = None
+            self._last_calibrated_at = None
+        if self._last_auto_learned_profile and self._last_auto_learned_profile.slug == mode_slug:
+            self._last_auto_learned_profile = None
+            self._last_auto_learned_at = None
+
+        self._remap_completed_result(mode_slug, None)
+        await self._async_persist_state()
+        await self.async_request_refresh()
+        return True
+
+    async def async_merge_learned_profiles(self, source_slug: str, target_slug: str) -> bool:
+        if source_slug == target_slug:
+            return False
+        source = self._profile_by_slug(source_slug)
+        target = self._profile_by_slug(target_slug)
+        if source is None or target is None:
+            return False
+
+        merged_target = self._merge_profiles(target, source)
+        updated_profiles: list[ProgramProfile] = []
+        for profile in self._learned_profiles:
+            if profile.slug == source_slug:
+                continue
+            if profile.slug == target_slug:
+                updated_profiles.append(merged_target)
+            else:
+                updated_profiles.append(profile)
+        self._learned_profiles = self._sort_profiles(updated_profiles)
+        self._engine.set_learned_profiles(self._learned_profiles)
+
+        if self._last_calibrated_profile and self._last_calibrated_profile.slug in {source_slug, target_slug}:
+            self._last_calibrated_profile = merged_target
+        if self._last_auto_learned_profile and self._last_auto_learned_profile.slug in {source_slug, target_slug}:
+            self._last_auto_learned_profile = merged_target
+
+        self._remap_completed_result(source_slug, merged_target)
+        self._remap_completed_result(target_slug, merged_target)
+        await self._async_persist_state()
+        await self.async_request_refresh()
+        return True
+
+    async def async_confirm_learned_profile(self, mode_slug: str) -> bool:
+        profile = self._profile_by_slug(mode_slug)
+        if profile is None:
+            return False
+
+        result = self._engine.completed_result
+        if result is None:
+            return False
+
+        updated = await self._async_update_existing_profile(mode_slug, result)
+        if not updated:
+            return False
+
+        self._engine.restore_completed_cycle(
+            replace(
+                result,
+                probable_program=profile.slug,
+                program_label=profile.label,
+                program_source=PROGRAM_SOURCE_LEARNED,
+                confidence=result.confidence,
+            ),
+            self._engine.completed_at,
+        )
+        self._last_processed_cycle_key = self._cycle_key(result)
+        await self._async_persist_state()
+        await self.async_request_refresh()
+        return True
+
     async def _async_handle_learning(self, result: InferenceResult, snapshot: SourceSnapshot) -> None:
         if self._calibration_active and self._calibration_cycle_started_at is None:
             if result.status == STATUS_RUNNING and result.cycle_started_at is not None:
@@ -272,14 +356,22 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         if result.status != "finished":
             return
         if result.program_source != PROGRAM_SOURCE_LEARNED:
+            if not self._should_auto_create_profile(result):
+                return
+            profile = self._build_learned_profile(result, auto_created=True)
+            self._learned_profiles.append(profile)
+            self._learned_profiles = self._sort_profiles(self._learned_profiles)
+            self._engine.set_learned_profiles(self._learned_profiles)
+            self._update_adaptive_thresholds_from_result(result)
+            self._last_auto_learned_profile = profile
+            self._last_auto_learned_at = dt_util.utcnow()
             return
         if (result.match_score or 0) < self._auto_learning_min_score:
             return
 
         updated = await self._async_update_existing_profile(result.probable_program, result)
-        if not updated:
-            return
-        self._last_processed_cycle_key = cycle_key
+        if updated:
+            self._last_processed_cycle_key = cycle_key
 
     async def _async_update_existing_profile(self, mode_slug: str, result: InferenceResult) -> bool:
         updated = False
@@ -305,7 +397,7 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
         self._update_adaptive_thresholds_from_result(result)
         return True
 
-    def _build_learned_profile(self, result: InferenceResult) -> ProgramProfile:
+    def _build_learned_profile(self, result: InferenceResult, *, auto_created: bool = False) -> ProgramProfile:
         finish_time = result.finish_time or result.last_activity_at or dt_util.utcnow()
         if self._calibration_started_at is not None:
             duration = max(1, int((finish_time - self._calibration_started_at).total_seconds() // 60))
@@ -325,14 +417,20 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             peak_power_w = result.observed_peak_power_w or None
             uses_heating = (result.diagnostics.get("high_power_samples", 0) > 0)
 
-        base_slug = self._slugify(result.program_label if result.probable_program != PROGRAM_UNKNOWN else "mode_appris")
+        mode_index = len(self._learned_profiles) + 1
+        base_name = result.program_label if result.probable_program != PROGRAM_UNKNOWN else "mode_appris"
+        if auto_created and result.probable_program == PROGRAM_UNKNOWN:
+            base_name = "mode_auto"
+        base_slug = self._slugify(base_name)
         if not base_slug:
-            base_slug = "mode_appris"
-        slug = f"learned_{base_slug}_{len(self._learned_profiles) + 1}"
-        if result.probable_program != PROGRAM_UNKNOWN:
-            label = f"Mode appris {result.program_label.lower()} {len(self._learned_profiles) + 1}"
+            base_slug = "mode_auto" if auto_created else "mode_appris"
+        slug = f"learned_{base_slug}_{mode_index}"
+        if auto_created and result.probable_program == PROGRAM_UNKNOWN:
+            label = f"Mode auto {mode_index}"
+        elif result.probable_program != PROGRAM_UNKNOWN:
+            label = f"Mode appris {result.program_label.lower()} {mode_index}"
         else:
-            label = f"Mode appris {len(self._learned_profiles) + 1}"
+            label = f"Mode appris {mode_index}"
         return ProgramProfile(
             slug=slug,
             label=label,
@@ -347,6 +445,34 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             high_power_ratio=cycle_signature.get("high_power_ratio"),
             spin_ratio=cycle_signature.get("spin_ratio"),
             signature=cycle_signature.get("signature"),
+        )
+
+    def _merge_profiles(self, target: ProgramProfile, source: ProgramProfile) -> ProgramProfile:
+        target_weight = max(1, target.sample_count)
+        source_weight = max(1, source.sample_count)
+        total_weight = target_weight + source_weight
+        return replace(
+            target,
+            min_duration_min=self._weighted_int(target.min_duration_min, target_weight, source.min_duration_min, source_weight),
+            typical_duration_min=self._weighted_int(
+                target.typical_duration_min,
+                target_weight,
+                source.typical_duration_min,
+                source_weight,
+            ),
+            max_duration_min=self._weighted_int(target.max_duration_min, target_weight, source.max_duration_min, source_weight),
+            sample_count=total_weight,
+            peak_power_w=self._weighted_optional_float(target.peak_power_w, target_weight, source.peak_power_w, source_weight),
+            uses_heating=self._weighted_optional_bool(target.uses_heating, target_weight, source.uses_heating, source_weight),
+            avg_power_w=self._weighted_optional_float(target.avg_power_w, target_weight, source.avg_power_w, source_weight),
+            high_power_ratio=self._weighted_optional_float(
+                target.high_power_ratio,
+                target_weight,
+                source.high_power_ratio,
+                source_weight,
+            ),
+            spin_ratio=self._weighted_optional_float(target.spin_ratio, target_weight, source.spin_ratio, source_weight),
+            signature=self._merge_signatures(target.signature, target_weight, source.signature, source_weight),
         )
 
     @staticmethod
@@ -365,6 +491,26 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             start_power_w=cycle_signature.get("start_power_w"),
             stop_power_w=cycle_signature.get("stop_power_w"),
         )
+
+    def _should_auto_create_profile(self, result: InferenceResult) -> bool:
+        if result.probable_program != PROGRAM_UNKNOWN:
+            return False
+        if not self._learned_profiles:
+            return False
+        if result.elapsed_minutes is None or result.elapsed_minutes < self._auto_create_min_duration:
+            return False
+        if result.diagnostics.get("power_source") == "missing":
+            return False
+
+        cycle_signature = result.diagnostics.get("cycle_signature", {})
+        compressed_signature = cycle_signature.get("signature") or []
+        if len(compressed_signature) < 4:
+            return False
+
+        if result.observed_peak_power_w <= max(self._base_start_power_w * 6, 40.0):
+            return False
+
+        return True
 
     @staticmethod
     def _cycle_key(result: InferenceResult) -> str | None:
@@ -394,6 +540,94 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             if profile.slug == slug:
                 return profile
         return None
+
+    def _restore_calibration_state(self, payload: dict[str, object] | None) -> None:
+        if not isinstance(payload, dict) or not payload.get("active"):
+            return
+        self._calibration_active = True
+        self._calibration_armed = False
+        self._calibration_started_at = payload.get("started_at")
+        self._calibration_cycle_started_at = payload.get("cycle_started_at")
+        self._calibration_power_samples = [float(value) for value in payload.get("power_samples", [])]
+        self._calibration_vibration_samples = [bool(value) for value in payload.get("vibration_samples", [])]
+
+    def _export_calibration_state(self) -> dict[str, object] | None:
+        if not self._calibration_active:
+            return None
+        return {
+            "active": True,
+            "started_at": self._calibration_started_at,
+            "cycle_started_at": self._calibration_cycle_started_at,
+            "power_samples": self._calibration_power_samples[-480:],
+            "vibration_samples": self._calibration_vibration_samples[-480:],
+        }
+
+    def _remap_completed_result(self, source_slug: str, target_profile: ProgramProfile | None) -> None:
+        completed_result = self._engine.completed_result
+        if completed_result is None or completed_result.probable_program != source_slug:
+            return
+        if target_profile is None:
+            updated_result = replace(
+                completed_result,
+                probable_program=PROGRAM_UNKNOWN,
+                program_label="Inconnu",
+                program_source="builtin",
+                match_score=None,
+            )
+        else:
+            updated_result = replace(
+                completed_result,
+                probable_program=target_profile.slug,
+                program_label=target_profile.label,
+                program_source=PROGRAM_SOURCE_LEARNED,
+            )
+        self._engine.restore_completed_cycle(updated_result, self._engine.completed_at)
+
+    @staticmethod
+    def _weighted_int(a: int, wa: int, b: int, wb: int) -> int:
+        return int(round(((a * wa) + (b * wb)) / max(1, wa + wb)))
+
+    @staticmethod
+    def _weighted_optional_float(a: float | None, wa: int, b: float | None, wb: int) -> float | None:
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return round(((a * wa) + (b * wb)) / max(1, wa + wb), 3)
+
+    @staticmethod
+    def _weighted_optional_bool(a: bool | None, wa: int, b: bool | None, wb: int) -> bool | None:
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return (((1 if a else 0) * wa) + ((1 if b else 0) * wb)) / max(1, wa + wb) >= 0.5
+
+    @classmethod
+    def _merge_signatures(
+        cls,
+        target: list[int] | None,
+        target_weight: int,
+        source: list[int] | None,
+        source_weight: int,
+    ) -> list[int] | None:
+        if not target:
+            return source
+        if not source:
+            return target
+        merged: list[int] = []
+        max_len = max(len(target), len(source))
+        for index in range(max_len):
+            left = target[index] if index < len(target) else None
+            right = source[index] if index < len(source) else None
+            if left is None:
+                merged.append(right)
+                continue
+            if right is None:
+                merged.append(left)
+                continue
+            merged.append(cls._weighted_int(left, target_weight, right, source_weight))
+        return merged
 
     def _begin_calibration_capture(
         self,
@@ -435,6 +669,9 @@ class WashingMachineCoordinator(DataUpdateCoordinator[InferenceResult]):
             last_auto_learned_at=self._last_auto_learned_at,
             completed_result=self._engine.completed_result,
             completed_at=self._engine.completed_at,
+            runtime_state=self._engine.export_runtime_state(),
+            calibration_state=self._export_calibration_state(),
+            last_processed_cycle_key=self._last_processed_cycle_key,
         )
 
     def _update_adaptive_thresholds_from_result(self, result: InferenceResult) -> None:

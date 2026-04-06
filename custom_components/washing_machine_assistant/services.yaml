@@ -23,3 +23,67 @@ rename_learned_mode:
       required: true
       selector:
         text:
+
+delete_learned_mode:
+  name: Supprimer un mode appris
+  description: Supprime un profil appris enregistre.
+  fields:
+    entity_id:
+      name: Entite
+      description: Entite de l'integration a cibler si plusieurs machines existent.
+      example: sensor.machine_a_laver_program
+      selector:
+        entity:
+          integration: washing_machine_assistant
+    mode_slug:
+      name: Slug du mode
+      description: Identifiant interne du mode appris a supprimer.
+      example: learned_quick_1
+      required: true
+      selector:
+        text:
+
+merge_learned_modes:
+  name: Fusionner deux modes appris
+  description: Fusionne un mode appris dans un autre et conserve le mode cible.
+  fields:
+    entity_id:
+      name: Entite
+      description: Entite de l'integration a cibler si plusieurs machines existent.
+      example: sensor.machine_a_laver_program
+      selector:
+        entity:
+          integration: washing_machine_assistant
+    source_mode_slug:
+      name: Slug source
+      description: Mode appris a fusionner puis supprimer.
+      example: learned_mix_40_3
+      required: true
+      selector:
+        text:
+    target_mode_slug:
+      name: Slug cible
+      description: Mode appris qui doit etre conserve.
+      example: learned_mix_60_2
+      required: true
+      selector:
+        text:
+
+confirm_learned_mode:
+  name: Confirmer le dernier cycle pour un mode appris
+  description: Rattache le dernier cycle termine au mode appris choisi pour le renforcer.
+  fields:
+    entity_id:
+      name: Entite
+      description: Entite de l'integration a cibler si plusieurs machines existent.
+      example: sensor.machine_a_laver_program
+      selector:
+        entity:
+          integration: washing_machine_assistant
+    mode_slug:
+      name: Slug du mode
+      description: Mode appris a renforcer avec le dernier cycle termine.
+      example: learned_mix_60_2
+      required: true
+      selector:
+        text:

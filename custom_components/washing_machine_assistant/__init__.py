@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .const import DOMAIN, PLATFORMS, SERVICE_RENAME_LEARNED_MODE
+from .const import (
+    DOMAIN,
+    PLATFORMS,
+    SERVICE_CONFIRM_LEARNED_MODE,
+    SERVICE_DELETE_LEARNED_MODE,
+    SERVICE_MERGE_LEARNED_MODES,
+    SERVICE_RENAME_LEARNED_MODE,
+)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -37,6 +44,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 }
             ),
         )
+    if not hass.services.has_service(DOMAIN, SERVICE_DELETE_LEARNED_MODE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_DELETE_LEARNED_MODE,
+            _handle_delete_learned_mode,
+            schema=vol.Schema(
+                {
+                    vol.Required("mode_slug"): vol.Coerce(str),
+                    vol.Optional("entity_id"): vol.Coerce(str),
+                }
+            ),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_MERGE_LEARNED_MODES):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_MERGE_LEARNED_MODES,
+            _handle_merge_learned_modes,
+            schema=vol.Schema(
+                {
+                    vol.Required("source_mode_slug"): vol.Coerce(str),
+                    vol.Required("target_mode_slug"): vol.Coerce(str),
+                    vol.Optional("entity_id"): vol.Coerce(str),
+                }
+            ),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_CONFIRM_LEARNED_MODE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CONFIRM_LEARNED_MODE,
+            _handle_confirm_learned_mode,
+            schema=vol.Schema(
+                {
+                    vol.Required("mode_slug"): vol.Coerce(str),
+                    vol.Optional("entity_id"): vol.Coerce(str),
+                }
+            ),
+        )
     return True
 
 
@@ -52,7 +96,6 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def _handle_rename_learned_mode(call: ServiceCall) -> None:
-    from .coordinator import WashingMachineCoordinator
     from homeassistant.exceptions import HomeAssistantError
 
     hass = call.hass
@@ -63,6 +106,38 @@ async def _handle_rename_learned_mode(call: ServiceCall) -> None:
     )
     if not renamed:
         raise HomeAssistantError(f"Mode appris introuvable : {call.data['mode_slug']}")
+
+
+async def _handle_delete_learned_mode(call: ServiceCall) -> None:
+    from homeassistant.exceptions import HomeAssistantError
+
+    coordinator = _resolve_coordinator(call.hass, call.data.get("entity_id"))
+    deleted = await coordinator.async_delete_learned_profile(mode_slug=call.data["mode_slug"])
+    if not deleted:
+        raise HomeAssistantError(f"Mode appris introuvable : {call.data['mode_slug']}")
+
+
+async def _handle_merge_learned_modes(call: ServiceCall) -> None:
+    from homeassistant.exceptions import HomeAssistantError
+
+    coordinator = _resolve_coordinator(call.hass, call.data.get("entity_id"))
+    merged = await coordinator.async_merge_learned_profiles(
+        source_slug=call.data["source_mode_slug"],
+        target_slug=call.data["target_mode_slug"],
+    )
+    if not merged:
+        raise HomeAssistantError("Fusion impossible pour les modes appris demandes")
+
+
+async def _handle_confirm_learned_mode(call: ServiceCall) -> None:
+    from homeassistant.exceptions import HomeAssistantError
+
+    coordinator = _resolve_coordinator(call.hass, call.data.get("entity_id"))
+    confirmed = await coordinator.async_confirm_learned_profile(mode_slug=call.data["mode_slug"])
+    if not confirmed:
+        raise HomeAssistantError(
+            "Confirmation impossible : cycle termine introuvable ou mode appris inexistant"
+        )
 
 
 def _resolve_coordinator(hass: HomeAssistant, entity_id: str | None) -> "WashingMachineCoordinator":

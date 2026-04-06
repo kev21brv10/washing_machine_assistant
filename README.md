@@ -95,7 +95,7 @@ Si ton interface HA est dans une autre langue, les `entity_id` peuvent differer.
 L'interface affiche maintenant des libelles francais, par exemple:
 
 - statut: `Inactif`, `En cours`, `Termine`, `Indisponible`
-- phase: `Demarrage`, `Chauffe`, `Lavage`, `Rincage`, `Essorage`, `Retour au calme`, `Inconnu`
+- phase: `Demarrage`, `Chauffe`, `Lavage`, `Rincage`, `Essorage`, `Fin de cycle`, `Inconnu`
 - calibration: `Inactive`, `Calibration armee`, `En cours de calibration`
 
 Pour les automatisations ou le debug, les attributs conservent aussi des valeurs techniques:
@@ -139,6 +139,12 @@ Attributs utiles pendant la calibration:
 - `learned_modes`
 - `match_score`
 
+Si Home Assistant redemarre pendant un cycle:
+
+- le cycle en cours est maintenant restaure
+- la calibration active est aussi reprise
+- le suivi repart donc avec son contexte runtime au lieu de redemarrer de zero
+
 ## 🧠 Detection du mode le plus proche
 
 L'integration ne cherche pas un mode exact. Elle cherche le cycle appris ou integre le plus proche a partir de:
@@ -155,6 +161,8 @@ Le resultat expose notamment:
 - `confidence` / `confidence_label`
 - `match_score`
 - `program_source` / `program_source_label`
+- `locked_program_label`
+- `best_match_label`
 
 ## 📈 Apprentissage progressif
 
@@ -164,6 +172,11 @@ Le fonctionnement vise ce flux:
 2. tu renommes ce mode
 3. les futurs cycles suffisamment proches sont rattaches automatiquement a ce mode
 4. le profil est mis a jour au fil des lavages pour devenir plus representatif
+
+Si aucun mode appris n'est assez proche:
+
+- l'integration peut garder `Programme probable = Inconnu`
+- puis creer automatiquement un nouveau mode appris a la fin d'un cycle termine proprement
 
 Attributs utiles:
 
@@ -201,6 +214,21 @@ Champs:
 - `entity_id` optionnel si une seule machine est configuree
 
 Le `slug` du mode est visible dans l'attribut `learned_modes` du capteur programme.
+
+## 🛠️ Gerer les modes appris
+
+Services disponibles:
+
+- `washing_machine_assistant.rename_learned_mode`
+- `washing_machine_assistant.delete_learned_mode`
+- `washing_machine_assistant.merge_learned_modes`
+- `washing_machine_assistant.confirm_learned_mode`
+
+Usage:
+
+- `delete_learned_mode` supprime un mode appris
+- `merge_learned_modes` fusionne un mode source dans un mode cible
+- `confirm_learned_mode` rattache le dernier cycle termine au mode appris choisi pour le renforcer
 
 ## ✅ Conseils pratiques
 

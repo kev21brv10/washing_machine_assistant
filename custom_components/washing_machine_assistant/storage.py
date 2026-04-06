@@ -10,7 +10,7 @@ from homeassistant.helpers.storage import Store
 from .const import DOMAIN
 from .engine import InferenceResult, ProgramProfile
 
-STORAGE_VERSION = 1
+STORAGE_VERSION = 2
 
 
 class WashingMachineStorage:
@@ -32,6 +32,9 @@ class WashingMachineStorage:
         last_auto_learned_at: datetime | None = None,
         completed_result: InferenceResult | None = None,
         completed_at: datetime | None = None,
+        runtime_state: dict[str, Any] | None = None,
+        calibration_state: dict[str, Any] | None = None,
+        last_processed_cycle_key: str | None = None,
     ) -> None:
         payload = {
             "learned_profiles": [asdict(profile) for profile in learned_profiles],
@@ -42,6 +45,9 @@ class WashingMachineStorage:
             "last_auto_learned_at": None if last_auto_learned_at is None else last_auto_learned_at.isoformat(),
             "completed_result": self._serialize_inference_result(completed_result),
             "completed_at": None if completed_at is None else completed_at.isoformat(),
+            "runtime_state": self._serialize_runtime_state(runtime_state),
+            "calibration_state": self._serialize_calibration_state(calibration_state),
+            "last_processed_cycle_key": last_processed_cycle_key,
         }
         await self._store.async_save(payload)
 
@@ -91,6 +97,31 @@ class WashingMachineStorage:
         except (TypeError, ValueError):
             return None
 
+    @classmethod
+    def parse_runtime_state(cls, data: dict[str, Any]) -> dict[str, Any] | None:
+        raw = data.get("runtime_state")
+        if not isinstance(raw, dict):
+            return None
+        payload = dict(raw)
+        for key in ("cycle_started_at", "last_activity_at", "inactive_since"):
+            payload[key] = cls.parse_datetime(payload.get(key))
+        return payload
+
+    @classmethod
+    def parse_calibration_state(cls, data: dict[str, Any]) -> dict[str, Any] | None:
+        raw = data.get("calibration_state")
+        if not isinstance(raw, dict):
+            return None
+        payload = dict(raw)
+        for key in ("started_at", "cycle_started_at"):
+            payload[key] = cls.parse_datetime(payload.get(key))
+        if not isinstance(payload.get("power_samples"), list):
+            payload["power_samples"] = []
+        if not isinstance(payload.get("vibration_samples"), list):
+            payload["vibration_samples"] = []
+        payload["active"] = bool(payload.get("active"))
+        return payload
+
     @staticmethod
     def _serialize_inference_result(result: InferenceResult | None) -> dict[str, Any] | None:
         if result is None:
@@ -100,3 +131,23 @@ class WashingMachineStorage:
             value = payload.get(key)
             payload[key] = None if value is None else value.isoformat()
         return payload
+
+    @staticmethod
+    def _serialize_runtime_state(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if payload is None:
+            return None
+        runtime = dict(payload)
+        for key in ("cycle_started_at", "last_activity_at", "inactive_since"):
+            value = runtime.get(key)
+            runtime[key] = None if value is None else value.isoformat()
+        return runtime
+
+    @staticmethod
+    def _serialize_calibration_state(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if payload is None:
+            return None
+        calibration = dict(payload)
+        for key in ("started_at", "cycle_started_at"):
+            value = calibration.get(key)
+            calibration[key] = None if value is None else value.isoformat()
+        return calibration
