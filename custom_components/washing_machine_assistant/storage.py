@@ -10,7 +10,9 @@ from homeassistant.helpers.storage import Store
 from .const import DOMAIN
 from .engine import InferenceResult, ProgramProfile
 
-STORAGE_VERSION = 2
+# The stored payload only gained optional keys. Keeping the storage version
+# stable avoids forcing a Home Assistant migration hook for additive changes.
+STORAGE_VERSION = 1
 
 
 class WashingMachineStorage:
